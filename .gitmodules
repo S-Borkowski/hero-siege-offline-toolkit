@@ -1,0 +1,30 @@
+[submodule "HS-ValueEditor"]
+	path = HS-ValueEditor
+	url = https://github.com/falorfrozen-cmd/HS-ValueEditor.git
+[submodule "HSSaveEditor-SteamDeck-"]
+	path = HSSaveEditor-SteamDeck-
+	url = https://github.com/falorfrozen-cmd/HSSaveEditor-SteamDeck-.git
+[submodule "Hs-Offline-Loot-Forge"]
+	path = Hs-Offline-Loot-Forge
+	url = https://github.com/falorfrozen-cmd/Hs-Offline-Loot-Forge.git
+[submodule "HS-Offline-Launcher"]
+	path = HS-Offline-Launcher
+	url = https://github.com/falorfrozen-cmd/HS-Offline-Launcher.git
+[submodule "hs-stat-forge"]
+	path = hs-stat-forge
+	url = https://github.com/falorfrozen-cmd/hs-stat-forge.git
+[submodule "HSSaveEditor"]
+	path = HSSaveEditor
+	url = https://github.com/falorfrozen-cmd/HSSaveEditor.git
+[submodule "HS-Offline-Tracker"]
+	path = HS-Offline-Tracker
+	url = https://github.com/falorfrozen-cmd/HS-Offline-Tracker.git
+[submodule "hero-siege-item-editor"]
+	path = hero-siege-item-editor
+	url = https://github.com/falorfrozen-cmd/hero-siege-item-editor.git
+[submodule "ForgePact"]
+	path = ForgePact
+	url = https://github.com/falorfrozen-cmd/ForgePact.git
+[submodule "HSCraftSim"]
+	path = HSCraftSim
+	url = https://github.com/falorfrozen-cmd/HSCraftSim.git

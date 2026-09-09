@@ -8,6 +8,60 @@ for all ten tools below.
 
 > These tools are intended for offline / single-player use only.
 
+---
+
+## Working with Submodules
+
+This repository uses Git submodules to link all individual tool repositories into one unified workspace.
+
+### Cloning with Submodules
+
+To clone this repository along with all submodules in a single step:
+
+```bash
+git clone --recurse-submodules https://github.com/falorfrozen-cmd/hero-siege-offline-toolkit.git
+```
+
+### Initializing and Pulling Submodules
+
+If you cloned the repository without `--recurse-submodules`, initialize and pull all submodules with:
+
+```bash
+git submodule update --init --recursive
+```
+
+### Updating Submodules
+
+To pull the latest changes for all submodules from their respective remote repositories:
+
+```bash
+git submodule update --remote --recursive
+```
+
+### Working Inside a Submodule
+
+1. Navigate into the submodule directory:
+   ```bash
+   cd <submodule-folder>
+   ```
+2. Checkout your working branch before editing (submodules often default to a detached HEAD):
+   ```bash
+   git checkout main
+   ```
+3. Commit and push changes directly within the submodule:
+   ```bash
+   git commit -m "Commit message"
+   git push origin main
+   ```
+4. Return to the root project to commit the updated submodule commit pointer:
+   ```bash
+   cd ..
+   git add <submodule-folder>
+   git commit -m "Update submodule reference"
+   ```
+
+---
+
 ## Tools
 
 Select a tool name for its repository and setup instructions, or **Download** to
