@@ -1,0 +1,203 @@
+# HS Save Editor Module Development Guide
+
+## Module Overview & Metadata
+- **Module Name:** HS Save Editor (Hero Siege Character Save Editor)
+- **Submodule Path:** `HSSaveEditor`
+- **Reviewed Git Revision:** `3c240f5474a65233893a8c88a098d829631dcc90` (Tag: `v1.4.1`, Branch: `main`)
+- **Revision Date:** `Mon Sep 7 09:14:30 2026 +0300`
+- **Commit Message:** `v1.4.1: Ether points floor odd quest stages like the game instead of refusing the save`
+- **Source Availability:** Full application source is present (`hs_save_editor.py`, `test_hs_save_editor.py`, `README.md`, `RELEASE_NOTES.md`, `LICENSE.txt`, and standalone Windows distribution `HeroSiegeSaveEditor.exe`).
+- **CI / Pipeline Availability:** **Not available** (no remote GitHub Actions or external CI configurations exist; validation is conducted locally via Python `unittest` test suites and static code audits).
+- **License & Provenance:** Permissive offline-use license (`LICENSE.txt` — allows use, copying, modification, and redistribution provided it is not represented as an official Hero Siege tool, is not used for online/multiplayer/trading/anti-cheat modes, and license terms remain attached).
+- **Purpose & Scope:** Standalone offline save editor and Season 10 progression forge for Hero Siege character `.hss` save files. Operates strictly offline on local saves located in `%LOCALAPPDATA%\Hero_Siege` (`hs2saves/`), shared account data in `shop.ini`, and per-character Ether sidecars (`ether<N>.hss`). Enables modification of character attributes, gold and professions, difficulty unlocking via the Act 9 campaign clear gate, difficulty-scoped waypoint unlocking, complete 30-cell charm grid activation (`fallOfDarkness|4`), exact quest-derived Ether Point allocation (100–800), and comprehensive subskill tree rank customization for all 24 playable classes. All modifications fail closed when Hero Siege is running and generate pre-mutation timestamped backups.
+
+---
+
+## Architecture & Repository Map
+
+### Repository Layout
+- `hs_save_editor.py`: Primary application source code and desktop entry point. Implements a Tkinter desktop GUI styled with a responsive Season 10 Character Save Forge dark rune theme, save discovery routines, binary XOR/zlib/base64 encoding and decoding pipelines, INI section mutation helpers, `shop.ini` synchronization, Ether sidecar managers, translation table resolution with built-in audited EXE class fallbacks, subskill cap validation, and automated backup cleanup routines.
+- `test_hs_save_editor.py`: Python `unittest` test suite containing 90 unit and integration tests across `CharacterBackupCleanupTests` and `Season10ProgressTests`. Tests cover `.hss` round-trip serialization, odd quest stage flooring, Ether point validation, 24-class subskill tree verification, legacy tree migration, and link/junction safety.
+- `HeroSiegeSaveEditor.exe`: Pre-compiled standalone Windows executable built via PyInstaller.
+- `README.md`: End-user documentation, feature overviews, Steam Deck / Proton directory guidance, and PyInstaller build instructions.
+- `RELEASE_NOTES.md`: Changelog documenting version changes from v1.3.0 through v1.4.1.
+- `LICENSE.txt`: Project license terms and offline safety notice.
+- `.gitignore`: Build artifact ignores (`dist/`, `build/`, `*.spec`, `*.bak*`, `__pycache__/`).
+
+---
+
+## Component Architecture & Data Flow
+
+```text
++-----------------------------------------------------------------------------------------+
+|                                  HS SAVE EDITOR (Python / Tkinter)                      |
+|                                                                                         |
+|   +----------------------------------------------------------------------------------+  |
+|   |                           HssEditorApp (Desktop UI)                              |  |
+|   |  - Character Vault Listbox (Numeric Slot Order)                                  |  |
+|   |  - Attribute & Profession Editors (Level, Gold, Professions)                     |  |
+|   |  - Action Grid: Unlock Difficulties, Unlock Waypoints, Unlock 30-Cell Charm Grid |  |
+|   |  - Progression Modals: Ether Points Picker (100-800), Subskill Tree Forge        |  |
+|   |  - Backup Cleanup Modal (Controlled Scans & Explicit Confirmation)               |  |
+|   +------------------+-------------------------------+-------------------------------+  |
+|                      |                               |                                  |
+|                      v                               v                                  v
+|       [ Save Decoder / Encoder ]           [ Shared Shop Engine ]             [ Ether Sidecar Engine ]
+|       - Base64 / zlib / XOR                - shop.ini parser                  - ether<N>.hss manager
+|       - Round-trip INI sections            - [shop] gold & professions        - StatEtherPoints logic
+|       - Preserves unknown data             - Atomic backup & write            - Loadout preservation
++----------------------|-------------------------------|----------------------------------+
+                       |                               |                                  |
+                       +-------------------------------+----------------------------------+
+                                                       |
+                                                       v (Direct file I/O with .bak)
++-----------------------------------------------------------------------------------------+
+| LOCAL DISK STORAGE: %LOCALAPPDATA%\Hero_Siege\ (or hs2saves\)                           |
+|                                                                                         |
+|   - Character Saves:  herosiege<N>.hss  (herosiege1.hss .. herosiege24.hss)             |
+|   - Shared Account:   shop.ini (Gold, Mining, Woodcutting, Fishing, Blacksmith, Alchemy)|
+|   - Ether Sidecars:   ether<N>.hss (Ether Tree node allocations per character slot)     |
+|   - Backups:          herosiege<N>.hss.bak_YYYYMMDD_HHMMSS                              |
+|   - External CSVs:    HeroSiege\bin\translationsTalent.csv, translationsSubTalent.csv   |
++-----------------------------------------------------------------------------------------+
+```
+
+---
+
+## Data Contracts & File Formats
+
+### 1. Character Save Format (`herosiege<N>.hss`)
+Hero Siege encodes character saves using a combination of character interleaving, XOR obfuscation, zlib compression, and Base64 encoding.
+
+- **Decoding Pipeline (`decode_hss_bytes`, `decode_hss_file`):**
+  1. Strip whitespace and null bytes (`\x00`).
+  2. Base64 decode to retrieve compressed bytes.
+  3. Decompress via `zlib.decompress`.
+  4. XOR decode byte-by-byte using the repeating multi-byte key `HSS_XOR_KEY`.
+  5. Validate that high bytes (`decoded[1::2]`) are null (rejecting corrupted payloads if the non-zero ratio exceeds 1%).
+  6. Extract payload from even bytes (`decoded[::2]`) and decode as UTF-8 (falling back to Latin-1 if needed).
+  7. Plain text fallback: If unencoded plain INI text is detected (`looks_like_plain_character_ini`), the file is loaded directly.
+- **Encoding Pipeline (`encode_hss_text`, `write_hss_file`):**
+  1. Normalize line endings to `\r\n`.
+  2. Encode UTF-8 text into an interleaved byte stream (even bytes receive the text, odd bytes are `0x00`).
+  3. Obfuscate via `xor_bytes` with `HSS_XOR_KEY`.
+  4. Compress using `zlib.compress(..., level=9)`.
+  5. Base64 encode and append a trailing null byte (`\x00`).
+- **Key Character Sections:**
+  - `[0]`: Character identity and stats (`name`, `class`, `level`, `hero_level`, `experience`, `gold`, `wormhole_level`, `difficulty`, `hell_subdifficulty`, `soloselffound`, `talent_loadout`, `act_1`..`act_9`, `zone1,0`..`zone9,9`). All numbers are formatted with 6 decimal places (e.g. `"1.000000"`).
+  - `[4]`: Quest progression dictionary (`questlog_chain<N>="<chain>|<stage>"`, `questlog_diff<N>="<diff>"`). Contains the 9 Ether quest chains and the Charm unlock quest (`fallOfDarkness|4`).
+  - `[inventory]`: Contains item descriptors (`item_0=""`, etc.). Preserved byte-for-byte during character modifications.
+  - `[talent_loadout_<N>]`: Active skill tree allocations (`talent_<id>="1"`).
+  - `[subtalent_loadout_<N>]`: Subskill allocations (`subtalent_<tree_id>_s<node_id>="<rank>"`).
+
+### 2. Shared Account Data (`shop.ini`)
+- Hero Siege stores gold and profession progress in `shop.ini` under the `[shop]` section rather than inside character saves.
+- Managed keys: `gold`, `mining`, `woodcutting`, `fishing`, `blacksmithing`, `alchemy`.
+- Writing character gold or profession values in the editor automatically locates and updates `shop.ini` in the active save folder.
+
+### 3. Ether Sidecars (`ether<N>.hss`) & Point Calculation
+- **Sidecar File:** Stored at `ether<N>.hss` (matching the character slot number `N`).
+- **Payload Structure:** An encoded `.hss` file containing `[ether]` or `[ether_loadout_<N>]` sections with key-value entries `node_<node_id>="1"`.
+- **Point Calculation Formula:**
+  - Total earned Ether Points are calculated from the character's 9 native quest chains in section `[4]` (`act1_ether` through `act8_ether`, plus `wormhole_ether`), matching the game's native `StatEtherPoints` routine.
+  - Each quest chain awards points in increments based on completed stages. Odd stages (e.g., stage 7 after an incomplete Inferno challenge) are floored to the lower even stage (`math.floor(stage / 2) * 2`) rather than throwing fractional point errors.
+  - Available unspent points = Total Earned Points − Active Loadout Allocated Nodes.
+- **Ether Points Picker:** Offers preset totals: 100, 200, 300, 400, 500, 600, 700, or 800. The picker blocks selections lower than the active loadout's currently allocated node count to prevent negative unspent balances.
+- **Future Node ID Preservation:** Ether node IDs are read without a fixed upper limit, ensuring future expanded trees remain compatible.
+
+### 4. Subskill Tree & Talent Mapping
+- **24 Playable Classes:** Viking, Pyromancer, Marksman, Nomad, Redneck, Necromancer, Samurai, Paladin, Amazon, Demon Slayer, Demonblade, Shaman, White Mage, Marauder, Plague Doctor, Berserker, Exorcist, Shield Lancer, Illusionist, Jotunn, Prophet, Phantom Knight, Huntress, Mechanic.
+- **14 Nodes per Tree:**
+  - `s1`–`s10`: Small subskill nodes. Each node possesses a game-verified rank cap (default 5, with tree-specific caps ranging from 1 to 8, such as Marksman Gunner Drone or Rapidfire).
+  - `s11`–`s14`: Mutually exclusive major/special nodes. When a major node is selected, it is written as 3/3 (`"3.000000"`) and competing major nodes (`s11`–`s14`) in that tree are set to 0.
+- **Translation Discovery & Fallback:**
+  - Checks for game translation files `HeroSiege\bin\translationsTalent.csv` and `translationsSubTalent.csv` in `%LOCALAPPDATA%` and Steam directories.
+  - If CSVs are absent, falls back to the audited built-in 24-class EXE mapping table (`S10_EXE_TALENT_IDS_BY_CLASS`, `S10_VERIFIED_SUBTALENT_IDS`, `S10_SMALL_SUBTALENT_CAP_OVERRIDES`).
+- **Legacy Migration & Safety:**
+  - Historical/renamed parent skills map via `S10_SUBTALENT_PARENT_ALIASES`.
+  - Deprecated tree IDs migrate only when a single unambiguous verified native target exists (e.g., legacy Poison Nova `t119` -> `t118`); ambiguous historical IDs are preserved without guessing.
+
+---
+
+## Process Boundaries, Save Safety, & Backup Protection
+
+### 1. Game-Closed Requirement & Safeguards
+- Save editing must only occur while `Hero_Siege.exe` is completely terminated. Writing to saves while the game is running risks process file locks, memory overwrites, or save truncation.
+- The editor does not inject code into live game processes or modify game memory.
+
+### 2. Pre-Mutation Backups
+- Every save modification automatically creates a timestamped copy:
+  - Pattern: `herosiege<N>.hss.bak_YYYYMMDD_HHMMSS`
+  - Location: Placed in the same directory as the target save file.
+  - `shop.ini` and `ether<N>.hss` modifications create corresponding `.bak_<timestamp>` files before rewriting.
+
+### 3. Safe Backup Cleanup Rules
+- **Target Filter:** Matches only files strictly conforming to `CHARACTER_BACKUP_NAME_PATTERN` (`^herosiege\d+\.hss\.bak_\d{8}_\d{6}$`).
+- **Protected Files:** Active character saves (`herosiege<N>.hss`), Shared Stash (`stash.hss`), `shop.ini`, Ether sidecars (`ether<N>.hss`), and non-character backups are excluded from cleanup.
+- **Directory Scope:** Scans the selected folder and its direct `hs2saves` child (unless `hs2saves` is already the selected folder).
+- **Link & Junction Avoidance:** Symlinks and Windows directory junctions are detected via `path_is_link_or_junction` and skipped to prevent traversal out of the intended save root.
+- **Confirmation Requirement:** Requires explicit user confirmation via a modal dialog before performing deletions; deletion validates snapshot freshness against disk state.
+
+### 4. Separate Difficulty and Waypoint Operations
+- **Difficulty Unlock:** Sets the Act 9 campaign clear gate in section `[4]` (`questlog_chain<N>="act9_campaign|4"`), unlocking Normal, Nightmare, Hell, and Inferno without altering the character's currently selected difficulty or overwriting waypoint arrays.
+- **Waypoint Unlock:** Unlocks all 10 zone slots for Acts 1–9 (`act_1`..`act_9` = 1, `zone1,0`..`zone9,9` = 1) strictly for the *currently selected difficulty*. To unlock Inferno waypoints, the player selects Inferno in-game, saves, and executes the waypoint unlock action.
+- **30-Cell Charm Grid Unlock:** Sets `fallOfDarkness|4` in `[4]` (the native Season 10 `Light of Dawn` quest completion state) and strips legacy synthetic `charmSlot` keys from section `[0]`.
+
+---
+
+## Setup, Build, Run, & Test Commands
+
+All commands below are executed from the submodule root `HSSaveEditor/` unless otherwise indicated.
+
+| Command | Shell / Platform | Working Directory | Prerequisites | Expected Result | Side Effects | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| `py -3 hs_save_editor.py` | PowerShell / CMD (Windows) | `HSSaveEditor/` | Python 3.10+ (Tkinter included) | Launches Tkinter Character Save Forge UI | Reads local saves in `%LOCALAPPDATA%\Hero_Siege` | Verified |
+| `py -3 -m unittest test_hs_save_editor.py` | PowerShell / CMD | `HSSaveEditor/` | Python 3.10+ | Runs all 90 automated unit and integration tests | Creates temporary directories in test sandbox | Verified |
+| `py -3 -m unittest test_hs_save_editor.CharacterBackupCleanupTests` | PowerShell / CMD | `HSSaveEditor/` | Python 3.10+ | Runs 8 backup cleanup and safety tests | None | Verified |
+| `py -3 -m unittest test_hs_save_editor.Season10ProgressTests` | PowerShell / CMD | `HSSaveEditor/` | Python 3.10+ | Runs 82 Season 10 progression, talent, and Ether tests | None | Verified |
+| `python -m PyInstaller --onefile --windowed --name HeroSiegeSaveEditor hs_save_editor.py` | PowerShell / CMD (Windows) | `HSSaveEditor/` | Python 3.13 (documented build environment), PyInstaller | Packages standalone GUI executable `dist/HeroSiegeSaveEditor.exe` | Creates `build/`, `dist/`, and `.spec` files | Inspected |
+
+### Build Environment & Packaging Notes
+- **Documented Build Environment:** Python 3.13 with PyInstaller is the documented build environment used for official release binaries (`HeroSiegeSaveEditor.exe`). Python 3.13 is recorded as the documented build environment, not an inferred strict minimum runtime requirement; the source code is compatible with Python 3.10+.
+- **PyInstaller Recipe:** Packaging uses `--onefile --windowed --name HeroSiegeSaveEditor` targeting `hs_save_editor.py`. No external C extensions, DLL hooks, or non-standard asset folders are required because all rune UI elements are procedurally rendered in Tkinter Canvas and standard library modules are utilized.
+- **Test Sandbox Paths:** In Windows environments where `TEMP` paths use 8.3 short names (e.g. `ADMINI~1`), path string assertions comparing `tempfile` outputs with long user profiles may differ during explicit path equality checks; tests using standard temporary files run cleanly.
+
+---
+
+## Coding Conventions & Persistence Invariants
+
+- **Standard Library Only:** Built entirely using Python standard libraries (`tkinter`, `sqlite3`, `zlib`, `base64`, `json`, `pathlib`, `re`, `shutil`, `argparse`, `dataclasses`, `math`). Requires no third-party package installations for development or execution.
+- **Preservation of Unknown Keys:** When parsing and rewriting `.hss` files, unrecognized INI sections and key-value pairs are preserved in their original ordering to prevent data loss across game patches.
+- **GameMaker Numeric Formatting:** Floating-point numbers written to `.hss` sections use 6 decimal places (e.g., `1.000000`, `0.000000`, `5.000000`) matching GameMaker Studio's native serialization format.
+- **Fail-Closed Progression:** Subskill rank inputs exceeding node caps or unverified class IDs are rejected immediately before file writes can occur.
+- **Atomic Operations:** File modifications generate backups prior to write, write normalized payloads, and verify buffer validity.
+
+---
+
+## Troubleshooting & Common Edge Cases
+
+| Issue / Symptom | Root Cause | Solution |
+| --- | --- | --- |
+| Save slot appears as "Empty / unsupported" | File is empty, a Steam Cloud placeholder, or from an incompatible platform | Verify that the save slot contains an active character and that the selected directory matches the game's active save folder. |
+| Changes do not appear in-game | Hero Siege was running while saving, causing the game to overwrite files on exit | Close Hero Siege completely before editing. Re-open editor, apply modifications, save, and then start the game. |
+| Steam Deck / Proton saves not found | Editor is pointing to local Windows AppData rather than the Proton prefix | On Linux/Steam Deck, direct the editor to the Hero Siege Proton prefix: `<SteamLibrary>/steamapps/compatdata/269210/pfx/drive_c/users/steamuser/AppData/Local/Hero_Siege/`. |
+| "Total points below allocated nodes" in Ether picker | Selected Ether total is lower than the points already allocated in the active Ether Tree | Choose an Ether Point preset equal to or higher than the number of nodes already allocated in the sidecar loadout. |
+| Backup cleanup does not remove old files | Files do not match `herosiegeN.hss.bak_YYYYMMDD_HHMMSS` or reside in symlinked folders | Ensure backup filenames follow the standard pattern. Symlinks and junctions are intentionally skipped for safety. |
+| Waypoints locked on Inferno after unlocking | Waypoints were unlocked while character was set to Normal or Nightmare | Select Inferno in-game, save character, then run "Unlock Waypoints (Current Difficulty)". Waypoint unlocks apply only to the active difficulty tier. |
+
+---
+
+## Maintenance Triggers & Upstream Links
+
+- **New Hero Siege Classes or Reworked Subskills:**
+  - Update `S10_EXE_TALENT_IDS_BY_CLASS`, `S10_VERIFIED_SUBTALENT_IDS`, and `S10_SMALL_SUBTALENT_CAP_OVERRIDES` in `hs_save_editor.py`.
+  - Add test fixtures in `test_hs_save_editor.py` verifying the 14-node layout for new class trees.
+- **Save Encoding / XOR Key Changes:**
+  - If GameMaker save obfuscation changes in a future season, update `HSS_XOR_KEY` and test round-trip encoding against new save samples.
+- **Shared Toolkit Documentation Links:**
+  - Submodule Index: [`../README.md`](../README.md)
+  - ForgePact (Native Aurie Plugin): [`../ForgePact/instructions.md`](../ForgePact/instructions.md)
+  - Hero Siege Item Editor: [`../hero-siege-item-editor/instructions.md`](../hero-siege-item-editor/instructions.md)
+  - HSCraftSim (Crafting Simulator): [`../HSCraftSim/instructions.md`](../HSCraftSim/instructions.md)
+  - HS Offline Launcher: [`../HS-Offline-Launcher/instructions.md`](../HS-Offline-Launcher/instructions.md)
+  - HS Offline Tracker: [`../HS-Offline-Tracker/instructions.md`](../HS-Offline-Tracker/instructions.md)
