@@ -16,6 +16,14 @@ from .stats import (
     DECODED_STAT_NAMES,
     BUFF_ANGELIC_CHANCE,
 )
+from .satanic_zone import (
+    SatanicMod,
+    SATANIC_BUFFS,
+    SATANIC_DEBUFFS,
+    SATANIC_ZONE_VAR,
+    SATANIC_ZONE_BUFF_VAR,
+    SATANIC_ZONE_DEBUFF_VAR,
+)
 from .structs import (
     ItemDefinitionStruct,
     ItemStatStruct,

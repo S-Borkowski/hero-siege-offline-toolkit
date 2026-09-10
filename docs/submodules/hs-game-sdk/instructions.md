@@ -29,6 +29,8 @@ hs-game-sdk/
 │   ├── sprites.json            # 32,270 Sprite indexes and names
 │   ├── rooms.json              # 306 Room indexes and names
 │   └── sounds.json             # 2,718 Sound indexes and names
+├── curated/                    # Hand-verified game knowledge (NOT gitignored - tracked)
+│   └── satanic_zone.json       # Satanic Zone buff/debuff ids/names/descriptions + Controller_obj var names
 ├── python/                     # Python SDK package
 │   ├── hs_game_sdk/
 │   │   ├── objects.py          # GameObject enum & index maps
@@ -39,7 +41,8 @@ hs-game-sdk/
 │   │   ├── stats.py            # StatId enum, proc bundles (116/117/118), buff IDs (332)
 │   │   ├── structs.py          # Dataclasses: ItemDefinitionStruct, ItemStatStruct, etc.
 │   │   ├── player.py           # EquipmentSlot enums, PlayerEquipment, container scanners
-│   │   └── mod_registry.py     # ModDefinition & ModRegistry for declarative mods
+│   │   ├── mod_registry.py     # ModDefinition & ModRegistry for declarative mods
+│   │   └── satanic_zone.py     # SATANIC_BUFFS/SATANIC_DEBUFFS tuples, generated from curated/satanic_zone.json
 │   ├── pyproject.toml
 │   └── setup.py
 ├── cpp/                        # C++ Header SDK for YYToolkit / Aurie Plugins
@@ -51,6 +54,7 @@ hs-game-sdk/
 │       ├── yytk_helpers.hpp    # Typed helper wrappers for YYTKInterface
 │       ├── hooks.hpp           # Declarative script hook macros (HS_INSTALL_SCRIPT_HOOK)
 │       ├── player.hpp          # Player discovery, inventory & maxed relic scanners
+│       ├── satanic_zone.hpp    # HeroSiege::SatanicZone::kBuffs/kDebuffs, generated from curated/satanic_zone.json
 │       └── hs_game_sdk.hpp     # Main aggregate header
 ├── ts/                         # TypeScript / ESM SDK for web and UI modules
 │   ├── src/
@@ -59,10 +63,22 @@ hs-game-sdk/
 │   │   ├── rooms.ts
 │   │   ├── stats.ts
 │   │   ├── player.ts
+│   │   ├── satanic_zone.ts     # SATANIC_BUFFS/SATANIC_DEBUFFS, generated from curated/satanic_zone.json
 │   │   └── index.ts
 │   └── package.json
 └── (Configured via repository root .gitignore & README.md)
 ```
+
+**`data/` vs `curated/`:** `data/` is mechanically extracted straight from `Hero_Siege.exe`/`data.win`
+by `tools/extract_and_generate_sdk.py` and is gitignored (see Safety section below) - it never leaves
+a contributor's machine. `curated/` is hand-verified game knowledge that no extractor can derive (item
+names/effect text that requires playing the game and cross-checking, not just walking a symbol table)
+and IS tracked in git, generated into the same three language targets by a small sibling script,
+`tools/generate_satanic_zone_sdk.py` (run it after editing a `curated/*.json` file; it is not part of
+`extract_and_generate_sdk.py`'s pipeline since it has nothing to extract from a binary). `curated/`
+is the pattern to extend for any future hand-verified, non-mechanically-extracted domain knowledge a
+submodule needs to share - see `ForgePact/docs/satanic-zone-mods-research.md` for how `satanic_zone.json`
+came to exist.
 
 ---
 
@@ -104,6 +120,7 @@ import { GameObject, GameScripts, StatId } from '@hero-siege/sdk';
 | Command | Working Directory | Purpose | Verification Status |
 | --- | --- | --- | --- |
 | `py -3 tools/extract_and_generate_sdk.py --game-bin "<path-to-game-bin>"` | Workspace Root | Re-extract symbols from `data.win` and regenerate all SDK bindings | Verified |
+| `py -3 tools/generate_satanic_zone_sdk.py` | Workspace Root | Regenerate `satanic_zone.py`/`.hpp`/`.ts` from `hs-game-sdk/curated/satanic_zone.json` (hand-edited, not extracted) | Verified 2026-09-10 |
 | `py -3 -m unittest discover tests` | Workspace Root | Run full SDK verification test suite | Verified |
 | `py -3 -m pip install -e hs-game-sdk/python` | Workspace Root | Install Python SDK in development mode | Verified |
 
@@ -111,6 +128,6 @@ import { GameObject, GameScripts, StatId } from '@hero-siege/sdk';
 
 ## Safety, Git & Intellectual Property Boundaries
 
-* **No Game Binaries / Bytecode in Git**: Root `.gitignore` excludes `data.win`, `.exe`, `.dll`, audio groups, texture pages, and raw dump folders (`hs-game-sdk/data/`, `raw/`, `extracted/`).
+* **No Game Binaries / Bytecode in Git**: Root `.gitignore` excludes `data.win`, `.exe`, `.dll`, audio groups, texture pages, and raw dump folders (`hs-game-sdk/data/`, `raw/`, `extracted/`). `hs-game-sdk/curated/` is the deliberate exception to this rule: it holds hand-verified data (not extracted bytecode/assets) and is meant to be shared, so it is tracked normally.
 * **Interoperability Definitions**: Distributes typed symbol names, enum IDs, and data structures necessary for interoperability and modding.
 * **Idempotent Regeneration**: Extraction tooling is deterministic and can be rerun against any updated game binary to regenerate SDK bindings.

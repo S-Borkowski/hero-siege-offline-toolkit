@@ -103,6 +103,15 @@ Extract symbols and generate SDK bindings from a local Hero Siege installation:
 py -3 tools/extract_and_generate_sdk.py --game-bin "C:\Program Files (x86)\Steam\steamapps\common\HeroSiege\bin"
 ```
 
+`hs-game-sdk/curated/` holds a second, smaller kind of data alongside the extracted symbols:
+hand-verified game knowledge (item/effect names and text that no mechanical extractor can
+derive) meant to be shared across submodules instead of copied into each one. Unlike
+`hs-game-sdk/data/`, `curated/` is tracked in git. Regenerate its bindings after editing a
+`curated/*.json` file:
+```powershell
+py -3 tools/generate_satanic_zone_sdk.py
+```
+
 ---
 
 ## Diagnostics
