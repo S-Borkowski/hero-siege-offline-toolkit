@@ -24,7 +24,7 @@ It serves as the unified source of truth for:
 hs-game-sdk/
 ├── data/                       # Extracted JSON databases (ignored by git for clean distribution)
 │   ├── manifest.json           # Binary metadata and hashes
-│   ├── objects.json            # 6,016 GameMaker Object definitions and indexes
+│   ├── objects.json            # 6,016 GameMaker Object definitions, indexes, parent hierarchy
 │   ├── scripts.json            # 6,254 GML Script names and asset indexes
 │   ├── sprites.json            # 32,270 Sprite indexes and names
 │   ├── rooms.json              # 306 Room indexes and names
@@ -82,6 +82,78 @@ came to exist.
 
 ---
 
+## OBJT Record Layout & the Object Parent Hierarchy
+
+`objects.json` is extracted by walking the `OBJT` chunk's pointer list. This build's
+runtime inserts a `managed` flag right after `visible`, which pushes every later field
+4 bytes further than the pre-2022.5 layout most references describe. Offsets relative
+to an object's record pointer, as measured against `data.win`
+(`2fc37b1b…`, GEN8 bytecode version 17, `UILR`/`PSEM`/`PSYS`/`FEAT` chunks present):
+
+| Offset | Field | Notes |
+| --- | --- | --- |
+| `+0` | name | string pointer |
+| `+4` | `sprite_index` | `-1` = no sprite |
+| `+8` | `visible` | bool32 |
+| `+12` | `managed` | bool32 — **the inserted field**; `true` for all 6,016 objects |
+| `+16` | `solid` | bool32 |
+| `+20` | `depth` | i32 — `0` for every object in this build (depth is layer-driven) |
+| `+24` | `persistent` | bool32 |
+| `+28` | `parent_index` | i32 **object** index, `-100` = root object |
+| `+32` | `mask_index` | i32 **sprite** index, `-1` = collide using `sprite_index` |
+| `+36` | `uses_physics` | bool32, followed by the physics block and the 15 event lists |
+
+Anchors that pin this layout, in case it has to be re-derived for a future game build:
+
+* `+48`/`+52`/`+64`/`+72` hold the GameMaker physics defaults `0.5`, `0.1`, `0.1`, `0.2`.
+* Parsing the tail from `+68` (physics vertex count) yields exactly 15 event lists whose
+  pointers are in-chunk and ascending for all 6,016 records, and no record's parsed end
+  overruns the next record's start.
+* `+28` is never anything but `-100` or a valid object index, and grouping by it produces
+  the families the names imply (`Collision_Prop_obj` 1,495 children, `Visual_Parent_obj` 960,
+  `Player_Damage_Parent_obj` 582, …), with 840 roots and no cycles.
+* `+32` reaches past the object table into the sprite table and resolves to the game's own
+  mask sprites (`Abandoned_Mine_Entrance_obj` → `Abandoned_Mine_Mask_spr`).
+
+`tests/test_object_hierarchy.py` asserts all of the above, including the three-level chain
+`Quest_Act_01_Coffee_Beans_obj → Quest_Object_Parent_obj → Pickup_Parent_obj`. Before
+2026-09-10 the extractor used the unshifted offsets, so `parent_index` carried the
+`persistent` flag (`0`/`1` only) and `mask_index` carried the parent index; any consumer
+written against a `data/objects.json` from before that date needs regenerating.
+
+### Hierarchy lookups in the bindings
+
+All three targets expose the parent/mask tables plus lookup helpers, so a hook can ask
+"is this instance an enemy?" instead of enumerating indices (the GML `object_is_ancestor`
+relation):
+
+```python
+from hs_game_sdk import get_parent_index, get_child_indices, is_descendant_of
+
+is_descendant_of("Quest_Act_01_Coffee_Beans_obj", "Pickup_Parent_obj")  # True
+len(get_child_indices("Collision_Prop_obj"))                            # 1495
+```
+
+```cpp
+using namespace HeroSiege::Objects;
+static_assert(IsDescendantOf(GameObject::Quest_Act_01_Coffee_Beans_obj,
+                             GameObject::Pickup_Parent_obj));
+std::vector<int32_t> props = GetChildObjects(static_cast<int32_t>(GameObject::Collision_Prop_obj));
+```
+
+```typescript
+import { GameObject, isDescendantOf, getChildObjects } from '@hero-siege/sdk';
+```
+
+Python: `OBJECT_PARENT_INDEX`, `OBJECT_MASK_SPRITE_INDEX`, `NO_PARENT`, `NO_MASK`,
+`get_parent_index`, `get_ancestor_indices`, `get_child_indices`, `get_descendant_indices`,
+`is_descendant_of`, `get_mask_sprite_index`. C++: `kObjectParents`, `kObjectMasks`,
+`kNoParent`, `kNoMask`, `GetParentObject`, `GetMaskSpriteIndex`, `IsDescendantOf`,
+`GetChildObjects`, `GetDescendantObjects` (the first three are `constexpr`, so ancestry
+checks can be `static_assert`ed). TypeScript mirrors the Python names in camelCase.
+
+---
+
 ## Integration Workflow Across Submodules
 
 ### 1. Python Submodules (`hero-siege-item-editor`, `HSSaveEditor`, etc.)
@@ -123,6 +195,18 @@ import { GameObject, GameScripts, StatId } from '@hero-siege/sdk';
 | `py -3 tools/generate_satanic_zone_sdk.py` | Workspace Root | Regenerate `satanic_zone.py`/`.hpp`/`.ts` from `hs-game-sdk/curated/satanic_zone.json` (hand-edited, not extracted) | Verified 2026-09-10 |
 | `py -3 -m unittest discover tests` | Workspace Root | Run full SDK verification test suite | Verified |
 | `py -3 -m pip install -e hs-game-sdk/python` | Workspace Root | Install Python SDK in development mode | Verified |
+
+### Never hand-edit a generated file
+
+`tools/extract_and_generate_sdk.py` rewrites **every** file under `python/hs_game_sdk/`,
+`cpp/include/hs_game_sdk/` and `ts/src/` on each run — including the ones with no extracted
+content in them (`__init__.py`, `hs_game_sdk.hpp`, `yytk_helpers.hpp`, `index.ts`), which come
+from string templates inside the generator. Editing those files in place works right up until
+the next extraction silently reverts them. Change the template in the generator instead, then
+re-run it; regeneration is idempotent, so a second run must produce no diff.
+
+`satanic_zone.py`/`.hpp`/`.ts` are the exception: they belong to
+`tools/generate_satanic_zone_sdk.py` and are regenerated from `curated/satanic_zone.json`.
 
 ---
 

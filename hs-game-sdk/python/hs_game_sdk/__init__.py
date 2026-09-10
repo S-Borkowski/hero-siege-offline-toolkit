@@ -4,7 +4,21 @@ Auto-generated bindings and models for Hero Siege GameMaker objects,
 scripts, assets, and runtime structures.
 """
 
-from .objects import GameObject, OBJECT_INDEX_TO_NAME, OBJECT_NAME_TO_INDEX
+from .objects import (
+    GameObject,
+    OBJECT_INDEX_TO_NAME,
+    OBJECT_NAME_TO_INDEX,
+    OBJECT_PARENT_INDEX,
+    OBJECT_MASK_SPRITE_INDEX,
+    NO_PARENT,
+    NO_MASK,
+    get_parent_index,
+    get_ancestor_indices,
+    get_child_indices,
+    get_descendant_indices,
+    is_descendant_of,
+    get_mask_sprite_index,
+)
 from .scripts import GameScript, SCRIPT_INDEX_TO_NAME, SCRIPT_NAME_TO_INDEX
 from .rooms import GameRoom, ROOM_INDEX_TO_NAME, ROOM_NAME_TO_INDEX
 from .sprites import GameSprite, SPRITE_INDEX_TO_NAME, SPRITE_NAME_TO_INDEX
@@ -38,6 +52,16 @@ __all__ = [
     "GameObject",
     "OBJECT_INDEX_TO_NAME",
     "OBJECT_NAME_TO_INDEX",
+    "OBJECT_PARENT_INDEX",
+    "OBJECT_MASK_SPRITE_INDEX",
+    "NO_PARENT",
+    "NO_MASK",
+    "get_parent_index",
+    "get_ancestor_indices",
+    "get_child_indices",
+    "get_descendant_indices",
+    "is_descendant_of",
+    "get_mask_sprite_index",
     "GameScript",
     "SCRIPT_INDEX_TO_NAME",
     "SCRIPT_NAME_TO_INDEX",

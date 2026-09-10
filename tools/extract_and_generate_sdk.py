@@ -91,6 +91,48 @@ class GameDataExtractor:
 
         return data
 
+    # OBJT record layout, measured against this build's data.win (GEN8 bytecode
+    # version 17; UILR/PSEM/PSYS/FEAT chunks present). This runtime inserts a
+    # `managed` flag after `visible`, which shifts every following field by 4
+    # bytes relative to the pre-2022.5 layout. Offsets are relative to a record
+    # pointer from the OBJT pointer list:
+    #
+    #   +0   name                  string pointer
+    #   +4   sprite_index          i32, -1 = no sprite
+    #   +8   visible               bool32
+    #   +12  managed               bool32  <- inserted by this runtime version
+    #   +16  solid                 bool32
+    #   +20  depth                 i32
+    #   +24  persistent            bool32
+    #   +28  parent_index          i32, OBJECT_NO_PARENT (-100) = no parent
+    #   +32  mask_index            i32 sprite index, -1 = use sprite_index
+    #   +36  uses_physics          bool32
+    #   +40  is_sensor             bool32
+    #   +44  collision_shape       i32
+    #   +48  physics props         floats (density, restitution, ...)
+    #   ...  physics shape vertices, then the 15 event-type lists
+    #
+    # Anchors that pin this layout (see tests/test_object_hierarchy.py):
+    #   * +48/+52/+64/+72 hold the GameMaker physics defaults 0.5/0.1/0.1/0.2.
+    #   * Reading the tail from +68 (vertex count) yields exactly 15 event lists
+    #     with in-chunk, ascending pointers for all 6016 records, and no record
+    #     overruns the next record's start.
+    #   * +28 is always -100 or a valid object index; +32 resolves to sprites
+    #     named "*_Mask_spr" / "Mask_Circle_*_spr".
+    OBJ_OFF_SPRITE = 4
+    OBJ_OFF_VISIBLE = 8
+    OBJ_OFF_MANAGED = 12
+    OBJ_OFF_SOLID = 16
+    OBJ_OFF_DEPTH = 20
+    OBJ_OFF_PERSISTENT = 24
+    OBJ_OFF_PARENT = 28
+    OBJ_OFF_MASK = 32
+
+    #: Sentinel stored in an object's parent slot when it has no parent object.
+    OBJECT_NO_PARENT = -100
+    #: Sentinel stored in an object's mask slot when it collides with its sprite.
+    OBJECT_NO_MASK = -1
+
     def extract_objects(self) -> List[Dict[str, Any]]:
         if "OBJT" not in self.chunks:
             return []
@@ -98,24 +140,17 @@ class GameDataExtractor:
         obj_ptrs = self.ptr_list(objt_base)
         objects = []
         for idx, ptr in enumerate(obj_ptrs):
-            name = self.get_string(self.u32(ptr))
-            sprite_idx = self.i32(ptr + 4)
-            visible = self.u32(ptr + 8)
-            solid = self.u32(ptr + 12)
-            depth = self.i32(ptr + 16)
-            persistent = self.u32(ptr + 20)
-            parent_idx = self.i32(ptr + 24)
-            mask_idx = self.i32(ptr + 28)
             objects.append({
                 "index": idx,
-                "name": name,
-                "sprite_index": sprite_idx,
-                "parent_index": parent_idx,
-                "depth": depth,
-                "visible": bool(visible),
-                "solid": bool(solid),
-                "persistent": bool(persistent),
-                "mask_index": mask_idx
+                "name": self.get_string(self.u32(ptr)),
+                "sprite_index": self.i32(ptr + self.OBJ_OFF_SPRITE),
+                "parent_index": self.i32(ptr + self.OBJ_OFF_PARENT),
+                "depth": self.i32(ptr + self.OBJ_OFF_DEPTH),
+                "visible": bool(self.u32(ptr + self.OBJ_OFF_VISIBLE)),
+                "managed": bool(self.u32(ptr + self.OBJ_OFF_MANAGED)),
+                "solid": bool(self.u32(ptr + self.OBJ_OFF_SOLID)),
+                "persistent": bool(self.u32(ptr + self.OBJ_OFF_PERSISTENT)),
+                "mask_index": self.i32(ptr + self.OBJ_OFF_MASK),
             })
         return objects
 
@@ -176,6 +211,95 @@ class GameDataExtractor:
         return sounds
 
 
+# Hierarchy helpers appended verbatim to the generated hs_game_sdk/objects.py.
+# They read the OBJECT_PARENT_INDEX / OBJECT_MASK_SPRITE_INDEX tables emitted
+# just above them.
+OBJECT_HIERARCHY_PY = '''
+
+ObjectRef = Union[int, str, "GameObject"]
+
+_CHILDREN: dict[int, tuple[int, ...]] = {}
+
+
+def _resolve(obj: ObjectRef) -> int:
+    """Normalize an object name, index or enum member to an object index."""
+    if isinstance(obj, str):
+        try:
+            return OBJECT_NAME_TO_INDEX[obj]
+        except KeyError:
+            raise KeyError(f"Unknown object name: {obj!r}") from None
+    return int(obj)
+
+
+def _children_table() -> dict[int, tuple[int, ...]]:
+    if not _CHILDREN:
+        acc: dict[int, list[int]] = {}
+        for child, parent in OBJECT_PARENT_INDEX.items():
+            acc.setdefault(parent, []).append(child)
+        _CHILDREN.update({p: tuple(sorted(c)) for p, c in acc.items()})
+    return _CHILDREN
+
+
+def get_parent_index(obj: ObjectRef) -> Optional[int]:
+    """Direct parent object index, or None when `obj` is a root object."""
+    return OBJECT_PARENT_INDEX.get(_resolve(obj))
+
+
+def iter_ancestor_indices(obj: ObjectRef) -> Iterator[int]:
+    """Yield parent, grandparent, ... up to the root. Cycle-safe."""
+    seen: set[int] = set()
+    current = OBJECT_PARENT_INDEX.get(_resolve(obj))
+    while current is not None and current not in seen:
+        seen.add(current)
+        yield current
+        current = OBJECT_PARENT_INDEX.get(current)
+
+
+def get_ancestor_indices(obj: ObjectRef) -> tuple[int, ...]:
+    """Parent chain from the direct parent up to the root."""
+    return tuple(iter_ancestor_indices(obj))
+
+
+def get_child_indices(obj: ObjectRef) -> tuple[int, ...]:
+    """Direct children of an object, ascending by index."""
+    return _children_table().get(_resolve(obj), ())
+
+
+def iter_descendant_indices(obj: ObjectRef) -> Iterator[int]:
+    """Yield every object below `obj` in the hierarchy. Cycle-safe."""
+    table = _children_table()
+    seen: set[int] = set()
+    stack = list(table.get(_resolve(obj), ()))
+    while stack:
+        current = stack.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        yield current
+        stack.extend(table.get(current, ()))
+
+
+def get_descendant_indices(obj: ObjectRef) -> tuple[int, ...]:
+    """Every object below `obj` in the hierarchy, ascending by index."""
+    return tuple(sorted(iter_descendant_indices(obj)))
+
+
+def is_descendant_of(obj: ObjectRef, ancestor: ObjectRef) -> bool:
+    """True when `obj` inherits from `ancestor` at any depth.
+
+    Mirrors the GML `object_is_ancestor(obj, ancestor)` relation, so a hook that
+    wants "every enemy" can test membership instead of enumerating indices.
+    """
+    target = _resolve(ancestor)
+    return any(a == target for a in iter_ancestor_indices(obj))
+
+
+def get_mask_sprite_index(obj: ObjectRef) -> Optional[int]:
+    """Explicit collision mask sprite index, or None when the object uses its own sprite."""
+    return OBJECT_MASK_SPRITE_INDEX.get(_resolve(obj))
+'''
+
+
 def generate_python_bindings(data: Dict[str, Any], output_dir: Path) -> None:
     py_dir = output_dir / "python" / "hs_game_sdk"
     py_dir.mkdir(parents=True, exist_ok=True)
@@ -187,7 +311,21 @@ Auto-generated bindings and models for Hero Siege GameMaker objects,
 scripts, assets, and runtime structures.
 """
 
-from .objects import GameObject, OBJECT_INDEX_TO_NAME, OBJECT_NAME_TO_INDEX
+from .objects import (
+    GameObject,
+    OBJECT_INDEX_TO_NAME,
+    OBJECT_NAME_TO_INDEX,
+    OBJECT_PARENT_INDEX,
+    OBJECT_MASK_SPRITE_INDEX,
+    NO_PARENT,
+    NO_MASK,
+    get_parent_index,
+    get_ancestor_indices,
+    get_child_indices,
+    get_descendant_indices,
+    is_descendant_of,
+    get_mask_sprite_index,
+)
 from .scripts import GameScript, SCRIPT_INDEX_TO_NAME, SCRIPT_NAME_TO_INDEX
 from .rooms import GameRoom, ROOM_INDEX_TO_NAME, ROOM_NAME_TO_INDEX
 from .sprites import GameSprite, SPRITE_INDEX_TO_NAME, SPRITE_NAME_TO_INDEX
@@ -199,18 +337,38 @@ from .stats import (
     DECODED_STAT_NAMES,
     BUFF_ANGELIC_CHANCE,
 )
+from .satanic_zone import (
+    SatanicMod,
+    SATANIC_BUFFS,
+    SATANIC_DEBUFFS,
+    SATANIC_ZONE_VAR,
+    SATANIC_ZONE_BUFF_VAR,
+    SATANIC_ZONE_DEBUFF_VAR,
+)
 from .structs import (
     ItemDefinitionStruct,
     ItemStatStruct,
     CraftData,
     PlayerInstance,
 )
+from .player import EquipmentSlot, PlayerEquipment, scan_relic_levels
+from .mod_registry import ModDefinition, ModRegistry, GLOBAL_MOD_REGISTRY
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 __all__ = [
     "GameObject",
     "OBJECT_INDEX_TO_NAME",
     "OBJECT_NAME_TO_INDEX",
+    "OBJECT_PARENT_INDEX",
+    "OBJECT_MASK_SPRITE_INDEX",
+    "NO_PARENT",
+    "NO_MASK",
+    "get_parent_index",
+    "get_ancestor_indices",
+    "get_child_indices",
+    "get_descendant_indices",
+    "is_descendant_of",
+    "get_mask_sprite_index",
     "GameScript",
     "SCRIPT_INDEX_TO_NAME",
     "SCRIPT_NAME_TO_INDEX",
@@ -232,15 +390,22 @@ __all__ = [
     "ItemStatStruct",
     "CraftData",
     "PlayerInstance",
+    "EquipmentSlot",
+    "PlayerEquipment",
+    "scan_relic_levels",
+    "ModDefinition",
+    "ModRegistry",
+    "GLOBAL_MOD_REGISTRY",
 ]
 '''
     (py_dir / "__init__.py").write_text(init_content, encoding="utf-8")
 
     # 2. objects.py
     lines = [
-        '"""GameMaker GameObject enumeration and index lookup tables."""',
+        '"""GameMaker GameObject enumeration, index maps and parent hierarchy."""',
         "from __future__ import annotations",
-        "from enum import IntEnum\n",
+        "from enum import IntEnum",
+        "from typing import Iterator, Optional, Union\n",
         "class GameObject(IntEnum):",
     ]
     name_map: Dict[str, int] = {}
@@ -258,9 +423,30 @@ __all__ = [
         name_map[name] = idx
         idx_map[idx] = name
 
+    parent_map = {
+        o["index"]: o["parent_index"]
+        for o in data["objects"]
+        if o["parent_index"] != GameDataExtractor.OBJECT_NO_PARENT
+    }
+    mask_map = {
+        o["index"]: o["mask_index"]
+        for o in data["objects"]
+        if o["mask_index"] != GameDataExtractor.OBJECT_NO_MASK
+    }
+
     lines.append("\n")
     lines.append("OBJECT_NAME_TO_INDEX: dict[str, int] = " + repr(name_map))
     lines.append("OBJECT_INDEX_TO_NAME: dict[int, str] = " + repr(idx_map))
+    lines.append("")
+    lines.append(f"NO_PARENT = {GameDataExtractor.OBJECT_NO_PARENT}")
+    lines.append(f"NO_MASK = {GameDataExtractor.OBJECT_NO_MASK}")
+    lines.append("")
+    lines.append("#: Child object index -> parent object index. Root objects are absent.")
+    lines.append("OBJECT_PARENT_INDEX: dict[int, int] = " + repr(parent_map))
+    lines.append("#: Object index -> collision mask *sprite* index. Absent means the")
+    lines.append("#: object collides using its own sprite_index.")
+    lines.append("OBJECT_MASK_SPRITE_INDEX: dict[int, int] = " + repr(mask_map))
+    lines.append(OBJECT_HIERARCHY_PY)
     (py_dir / "objects.py").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     # 3. scripts.py
@@ -570,6 +756,109 @@ setup(
     (output_dir / "python" / "README.md").write_text("# Hero Siege Game SDK (Python)\n\nImportable SDK for Hero Siege GameMaker symbols, objects, scripts, and stat models.\n", encoding="utf-8")
 
 
+def _packed_int_table(values: List[int], per_line: int = 16) -> List[str]:
+    """Format an int list as brace-initializer body lines."""
+    out = []
+    for start in range(0, len(values), per_line):
+        chunk = values[start:start + per_line]
+        out.append("    " + ", ".join(str(v) for v in chunk) + ",")
+    return out
+
+
+def _cpp_hierarchy_lines(data: Dict[str, Any]) -> List[str]:
+    """Parent/mask tables plus lookup helpers for objects.hpp."""
+    objects = data["objects"]
+    count = len(objects)
+    parents = [o["parent_index"] for o in objects]
+    masks = [o["mask_index"] for o in objects]
+
+    lines = [
+        f"//: Sentinel stored in the parent slot of a root object.",
+        f"inline constexpr int32_t kNoParent = {GameDataExtractor.OBJECT_NO_PARENT};",
+        "//: Sentinel meaning \"collide using my own sprite\".",
+        f"inline constexpr int32_t kNoMask = {GameDataExtractor.OBJECT_NO_MASK};",
+        f"inline constexpr int32_t kObjectCount = {count};",
+        "",
+        "//: Parent object index per object index; kNoParent for root objects.",
+        f"inline constexpr std::array<int32_t, {count}> kObjectParents = {{",
+    ]
+    lines.extend(_packed_int_table(parents))
+    lines.extend([
+        "};",
+        "",
+        "//: Collision mask *sprite* index per object index; kNoMask when the",
+        "//: object collides using its own sprite.",
+        f"inline constexpr std::array<int32_t, {count}> kObjectMasks = {{",
+    ])
+    lines.extend(_packed_int_table(masks))
+    lines.extend([
+        "};",
+        "",
+        "[[nodiscard]] inline constexpr bool IsValidObject(int32_t obj) {",
+        "    return obj >= 0 && obj < kObjectCount;",
+        "}",
+        "",
+        "//: Direct parent object index, or kNoParent for a root/unknown object.",
+        "[[nodiscard]] inline constexpr int32_t GetParentObject(int32_t obj) {",
+        "    return IsValidObject(obj) ? kObjectParents[static_cast<size_t>(obj)] : kNoParent;",
+        "}",
+        "",
+        "[[nodiscard]] inline constexpr int32_t GetParentObject(GameObject obj) {",
+        "    return GetParentObject(static_cast<int32_t>(obj));",
+        "}",
+        "",
+        "//: Collision mask sprite index, or kNoMask when the object uses its own sprite.",
+        "[[nodiscard]] inline constexpr int32_t GetMaskSpriteIndex(int32_t obj) {",
+        "    return IsValidObject(obj) ? kObjectMasks[static_cast<size_t>(obj)] : kNoMask;",
+        "}",
+        "",
+        "[[nodiscard]] inline constexpr int32_t GetMaskSpriteIndex(GameObject obj) {",
+        "    return GetMaskSpriteIndex(static_cast<int32_t>(obj));",
+        "}",
+        "",
+        "//: True when `obj` inherits from `ancestor` at any depth, mirroring the",
+        "//: GML object_is_ancestor() relation. Bounded so a malformed table cannot",
+        "//: spin forever.",
+        "[[nodiscard]] inline constexpr bool IsDescendantOf(int32_t obj, int32_t ancestor) {",
+        "    int32_t current = GetParentObject(obj);",
+        "    for (int32_t hops = 0; current != kNoParent && hops < kObjectCount; ++hops) {",
+        "        if (current == ancestor) {",
+        "            return true;",
+        "        }",
+        "        current = GetParentObject(current);",
+        "    }",
+        "    return false;",
+        "}",
+        "",
+        "[[nodiscard]] inline constexpr bool IsDescendantOf(GameObject obj, GameObject ancestor) {",
+        "    return IsDescendantOf(static_cast<int32_t>(obj), static_cast<int32_t>(ancestor));",
+        "}",
+        "",
+        "//: Direct children of `obj`, ascending by index.",
+        "[[nodiscard]] inline std::vector<int32_t> GetChildObjects(int32_t obj) {",
+        "    std::vector<int32_t> children;",
+        "    for (int32_t i = 0; i < kObjectCount; ++i) {",
+        "        if (kObjectParents[static_cast<size_t>(i)] == obj) {",
+        "            children.push_back(i);",
+        "        }",
+        "    }",
+        "    return children;",
+        "}",
+        "",
+        "//: Every object below `obj` in the hierarchy, ascending by index.",
+        "[[nodiscard]] inline std::vector<int32_t> GetDescendantObjects(int32_t obj) {",
+        "    std::vector<int32_t> descendants;",
+        "    for (int32_t i = 0; i < kObjectCount; ++i) {",
+        "        if (IsDescendantOf(i, obj)) {",
+        "            descendants.push_back(i);",
+        "        }",
+        "    }",
+        "    return descendants;",
+        "}",
+    ])
+    return lines
+
+
 def generate_cpp_bindings(data: Dict[str, Any], output_dir: Path) -> None:
     inc_dir = output_dir / "cpp" / "include" / "hs_game_sdk"
     inc_dir.mkdir(parents=True, exist_ok=True)
@@ -577,10 +866,12 @@ def generate_cpp_bindings(data: Dict[str, Any], output_dir: Path) -> None:
     # 1. objects.hpp
     lines = [
         "#pragma once",
+        "#include <array>",
         "#include <cstdint>",
         "#include <string_view>",
         "#include <string>",
         "#include <unordered_map>",
+        "#include <vector>",
         "",
         "namespace HeroSiege::Objects {",
         "",
@@ -610,6 +901,10 @@ def generate_cpp_bindings(data: Dict[str, Any], output_dir: Path) -> None:
         "        default: return \"Unknown_Object\";",
         "    }",
         "}",
+        "",
+    ])
+    lines.extend(_cpp_hierarchy_lines(data))
+    lines.extend([
         "",
         "} // namespace HeroSiege::Objects",
     ])
@@ -672,6 +967,7 @@ def generate_cpp_bindings(data: Dict[str, Any], output_dir: Path) -> None:
     helpers = '''#pragma once
 #include <string_view>
 #include <vector>
+#include <string>
 #include "objects.hpp"
 #include "scripts.hpp"
 
@@ -688,6 +984,8 @@ namespace HeroSiege::YYTK {
 using ::YYTK::RValue;
 using ::YYTK::CInstance;
 using ::YYTK::YYTKInterface;
+using ::YYTK::CScript;
+using ::YYTK::PFUNC_YYGMLScript;
 
 inline RValue CallGameScript(YYTKInterface* yytk, std::string_view scriptName, const std::vector<RValue>& args = {}) {
     if (!yytk) return RValue();
@@ -704,6 +1002,36 @@ inline void SetInstanceVariable(YYTKInterface* yytk, const RValue& instance, std
     yytk->CallBuiltin("variable_instance_set", { instance, RValue(std::string(varName)), value });
 }
 
+inline bool InstanceHasVariable(YYTKInterface* yytk, const RValue& instance, std::string_view varName) {
+    if (!yytk) return false;
+    return yytk->CallBuiltin("variable_instance_exists", { instance, RValue(std::string(varName)) }).ToBoolean();
+}
+
+inline RValue GetStructVariable(YYTKInterface* yytk, const RValue& structVal, std::string_view varName) {
+    if (!yytk || structVal.m_Kind != ::YYTK::VALUE_OBJECT) return RValue();
+    return yytk->CallBuiltin("variable_struct_get", { structVal, RValue(std::string(varName)) });
+}
+
+inline RValue GetStructVariable(YYTKInterface* yytk, const RValue& structVal, const char* varName) {
+    if (!yytk || structVal.m_Kind != ::YYTK::VALUE_OBJECT || !varName) return RValue();
+    return yytk->CallBuiltin("variable_struct_get", { structVal, RValue(std::string(varName)) });
+}
+
+inline RValue GetStructElement(YYTKInterface* yytk, const RValue& structVal, const RValue& keyVal) {
+    if (!yytk || structVal.m_Kind != ::YYTK::VALUE_OBJECT) return RValue();
+    return yytk->CallBuiltin("variable_struct_get", { structVal, keyVal });
+}
+
+inline void SetStructVariable(YYTKInterface* yytk, const RValue& structVal, std::string_view varName, const RValue& value) {
+    if (!yytk || structVal.m_Kind != ::YYTK::VALUE_OBJECT) return;
+    yytk->CallBuiltin("variable_struct_set", { structVal, RValue(std::string(varName)), value });
+}
+
+inline bool StructHasVariable(YYTKInterface* yytk, const RValue& structVal, std::string_view varName) {
+    if (!yytk || structVal.m_Kind != ::YYTK::VALUE_OBJECT) return false;
+    return yytk->CallBuiltin("variable_struct_exists", { structVal, RValue(std::string(varName)) }).ToBoolean();
+}
+
 inline RValue GetGlobalVariable(YYTKInterface* yytk, std::string_view varName) {
     if (!yytk) return RValue();
     return yytk->CallBuiltin("variable_global_get", { RValue(std::string(varName)) });
@@ -713,6 +1041,22 @@ inline void SetGlobalVariable(YYTKInterface* yytk, std::string_view varName, con
     if (!yytk) return;
     yytk->CallBuiltin("variable_global_set", { RValue(std::string(varName)), value });
 }
+
+inline bool GlobalHasVariable(YYTKInterface* yytk, std::string_view varName) {
+    if (!yytk) return false;
+    return yytk->CallBuiltin("variable_global_exists", { RValue(std::string(varName)) }).ToBoolean();
+}
+
+inline int GetArrayLength(YYTKInterface* yytk, const RValue& arrayVal) {
+    if (!yytk || arrayVal.m_Kind != ::YYTK::VALUE_ARRAY) return 0;
+    return static_cast<int>(yytk->CallBuiltin("array_length", { arrayVal }).ToDouble());
+}
+
+inline RValue GetArrayElement(YYTKInterface* yytk, const RValue& arrayVal, int index) {
+    if (!yytk || arrayVal.m_Kind != ::YYTK::VALUE_ARRAY) return RValue();
+    return yytk->CallBuiltin("array_get", { arrayVal, RValue(static_cast<double>(index)) });
+}
+
 #endif
 
 } // namespace HeroSiege::YYTK
@@ -726,6 +1070,9 @@ inline void SetGlobalVariable(YYTKInterface* yytk, std::string_view varName, con
 #include "scripts.hpp"
 #include "rooms.hpp"
 #include "yytk_helpers.hpp"
+#include "hooks.hpp"
+#include "player.hpp"
+#include "satanic_zone.hpp"
 
 namespace HeroSiege {
     inline constexpr int32_t BUFF_ANGELIC_CHANCE = 332;
@@ -733,6 +1080,82 @@ namespace HeroSiege {
 }
 '''
     (inc_dir / "hs_game_sdk.hpp").write_text(main_header, encoding="utf-8")
+
+
+# Hierarchy helpers appended verbatim to the generated ts/src/objects.ts.
+OBJECT_HIERARCHY_TS = '''
+let childrenTable: Map<number, number[]> | null = null;
+
+function childrenByParent(): Map<number, number[]> {
+  if (childrenTable === null) {
+    childrenTable = new Map<number, number[]>();
+    for (const [child, parent] of Object.entries(OBJECT_PARENT_INDEX)) {
+      const bucket = childrenTable.get(parent);
+      if (bucket === undefined) {
+        childrenTable.set(parent, [Number(child)]);
+      } else {
+        bucket.push(Number(child));
+      }
+    }
+    for (const bucket of childrenTable.values()) {
+      bucket.sort((a, b) => a - b);
+    }
+  }
+  return childrenTable;
+}
+
+/** Direct parent object index, or undefined when `obj` is a root object. */
+export function getParentObject(obj: number): number | undefined {
+  return OBJECT_PARENT_INDEX[obj];
+}
+
+/** Parent chain from the direct parent up to the root. Cycle-safe. */
+export function getAncestorObjects(obj: number): number[] {
+  const chain: number[] = [];
+  const seen = new Set<number>();
+  let current = OBJECT_PARENT_INDEX[obj];
+  while (current !== undefined && !seen.has(current)) {
+    seen.add(current);
+    chain.push(current);
+    current = OBJECT_PARENT_INDEX[current];
+  }
+  return chain;
+}
+
+/** Direct children of an object, ascending by index. */
+export function getChildObjects(obj: number): number[] {
+  return childrenByParent().get(obj) ?? [];
+}
+
+/** Every object below `obj` in the hierarchy, ascending by index. Cycle-safe. */
+export function getDescendantObjects(obj: number): number[] {
+  const table = childrenByParent();
+  const seen = new Set<number>();
+  const stack = [...(table.get(obj) ?? [])];
+  while (stack.length > 0) {
+    const current = stack.pop() as number;
+    if (seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+    stack.push(...(table.get(current) ?? []));
+  }
+  return [...seen].sort((a, b) => a - b);
+}
+
+/**
+ * True when `obj` inherits from `ancestor` at any depth, mirroring the GML
+ * object_is_ancestor() relation.
+ */
+export function isDescendantOf(obj: number, ancestor: number): boolean {
+  return getAncestorObjects(obj).includes(ancestor);
+}
+
+/** Explicit collision mask sprite index, or undefined when the object uses its own sprite. */
+export function getMaskSpriteIndex(obj: number): number | undefined {
+  return OBJECT_MASK_SPRITE_INDEX[obj];
+}
+'''
 
 
 def generate_ts_bindings(data: Dict[str, Any], output_dir: Path) -> None:
@@ -748,6 +1171,7 @@ export * from './objects';
 export * from './scripts';
 export * from './rooms';
 export * from './stats';
+export * from './satanic_zone';
 '''
     (ts_dir / "index.ts").write_text(index_content, encoding="utf-8")
 
@@ -765,6 +1189,34 @@ export * from './stats';
         used_names.add(clean)
         lines.append(f"  {clean} = {idx},")
     lines.append("}\n")
+
+    ts_parents = {
+        o["index"]: o["parent_index"]
+        for o in data["objects"]
+        if o["parent_index"] != GameDataExtractor.OBJECT_NO_PARENT
+    }
+    ts_masks = {
+        o["index"]: o["mask_index"]
+        for o in data["objects"]
+        if o["mask_index"] != GameDataExtractor.OBJECT_NO_MASK
+    }
+    lines.append(f"export const NO_PARENT = {GameDataExtractor.OBJECT_NO_PARENT};")
+    lines.append(f"export const NO_MASK = {GameDataExtractor.OBJECT_NO_MASK};")
+    lines.append("")
+    lines.append("/** Child object index -> parent object index. Root objects are absent. */")
+    lines.append(
+        "export const OBJECT_PARENT_INDEX: Readonly<Record<number, number>> = "
+        + json.dumps(ts_parents)
+        + ";"
+    )
+    lines.append("/** Object index -> collision mask *sprite* index. Absent means the")
+    lines.append(" *  object collides using its own sprite index. */")
+    lines.append(
+        "export const OBJECT_MASK_SPRITE_INDEX: Readonly<Record<number, number>> = "
+        + json.dumps(ts_masks)
+        + ";"
+    )
+    lines.append(OBJECT_HIERARCHY_TS)
     (ts_dir / "objects.ts").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     # 3. scripts.ts
