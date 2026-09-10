@@ -53,6 +53,21 @@ When working with submodules utilizing `YYToolkit` (such as `ForgePact` and `HS-
 
 ---
 
+## Automated Submodule Pointer Updates
+
+[`.github/workflows/submodule-dispatch.yml`](../../.github/workflows/submodule-dispatch.yml)
+listens for a `repository_dispatch` event (type `submodule-updated`) and opens
+a PR bumping the recorded commit for the named submodule — it never pushes
+directly to a branch, so a bump always goes through review. The event is
+meant to be fired by a small workflow living in each submodule's own repo
+(template: [`.github/workflow-templates/notify-hub.example.yml`](../../.github/workflow-templates/notify-hub.example.yml)),
+triggered when a commit lands on that submodule's tracked branch. Wiring the
+sender side into a submodule repo requires push access there and a
+`HUB_DISPATCH_TOKEN` secret scoped to this hub repo — see the template's
+header comment for setup steps.
+
+---
+
 ## Index Maintenance & Guide Reconciliation
 
 - When a new submodule guide is authored at `docs/submodules/<module-name>/instructions.md`, update its entry in the inventory table above from a plain-text pending reference to an active relative link (`[<Module> Instructions](<module-name>/instructions.md)`).

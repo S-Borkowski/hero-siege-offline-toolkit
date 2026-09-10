@@ -1,0 +1,39 @@
+# Template — copy this file to `.github/workflows/notify-hub.yml` inside each
+# submodule's OWN repository (e.g. falorfrozen-cmd/ForgePact). It does not run
+# here in the hub; the hub only has the receiving side
+# (.github/workflows/submodule-dispatch.yml).
+#
+# Setup per submodule repo:
+#   1. Copy this file in, renaming to `.github/workflows/notify-hub.yml`.
+#   2. Add a repo secret `HUB_DISPATCH_TOKEN`: a PAT with `contents: write`
+#      (classic `repo` scope, or a fine-grained token scoped to just the hub
+#      repo) belonging to an account with push access to the hub repo. The
+#      default GITHUB_TOKEN cannot dispatch across repos, so this step is
+#      required — mint it from whoever administers the hub repo.
+#   3. Replace `<hub-owner>/<hub-repo>` below with the hub's actual
+#      `owner/repo` (e.g. `falorfrozen-cmd/hero-siege-offline-toolkit`).
+#   4. Replace `<submodule-path>` with this submodule's path exactly as it
+#      appears in the hub's `.gitmodules` (case-sensitive), e.g. `ForgePact`.
+
+name: Notify hub on merge to main
+
+on:
+  push:
+    branches: [main]
+  # Use this instead of the push trigger above if you want it to fire
+  # strictly on PR merges rather than every push to main:
+  # pull_request:
+  #   types: [closed]
+  # and add: `if: github.event.pull_request.merged == true` to the job.
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.HUB_DISPATCH_TOKEN }}
+          repository: <hub-owner>/<hub-repo>
+          event-type: submodule-updated
+          client-payload: >-
+            {"submodule": "<submodule-path>", "sha": "${{ github.sha }}"}

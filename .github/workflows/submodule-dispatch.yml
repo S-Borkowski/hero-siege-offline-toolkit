@@ -1,0 +1,98 @@
+name: Bump Submodule Pointer (dispatch)
+
+# Receives a repository_dispatch event fired by a submodule's own repo when a
+# commit lands on its tracked branch (see
+# .github/workflow-templates/notify-hub.example.yml for the sender side that
+# belongs in each submodule repo, not here). Opens a PR that bumps this
+# repo's recorded commit for that submodule rather than pushing directly, so
+# a bad or unexpected payload can't land on main unreviewed.
+#
+# Expected client_payload:
+#   { "submodule": "<path from .gitmodules>", "sha": "<full commit SHA>" }
+
+on:
+  repository_dispatch:
+    types: [submodule-updated]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump-pointer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate payload
+        id: validate
+        env:
+          SUBMODULE: ${{ github.event.client_payload.submodule }}
+          SHA: ${{ github.event.client_payload.sha }}
+        run: |
+          set -euo pipefail
+
+          # Allowlist of known submodule paths (keep in sync with .gitmodules).
+          # Prevents an unexpected payload from pointing `git -C` at an
+          # arbitrary path outside the repo.
+          case "$SUBMODULE" in
+            HS-ValueEditor|HSSaveEditor-SteamDeck-|Hs-Offline-Loot-Forge| \
+            HS-Offline-Launcher|hs-stat-forge|HSSaveEditor| \
+            HS-Offline-Tracker|hero-siege-item-editor|ForgePact|HSCraftSim)
+              ;;
+            *)
+              echo "::error::Unknown submodule path in payload: '$SUBMODULE'"
+              exit 1
+              ;;
+          esac
+
+          if ! [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Payload sha is not a 40-char hex commit SHA: '$SHA'"
+            exit 1
+          fi
+
+          echo "submodule=$SUBMODULE" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${SHA:0:7}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0
+
+      - name: Fetch and check out the dispatched commit in the submodule
+        working-directory: ${{ steps.validate.outputs.submodule }}
+        run: |
+          set -euo pipefail
+          git fetch --depth 1 origin "${{ steps.validate.outputs.sha }}"
+          git checkout "${{ steps.validate.outputs.sha }}"
+
+      - name: Stage the pointer bump
+        id: stage
+        run: |
+          set -euo pipefail
+          git add "${{ steps.validate.outputs.submodule }}"
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open PR with the updated pointer
+        if: steps.stage.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: >-
+            chore: bump ${{ steps.validate.outputs.submodule }} to
+            ${{ steps.validate.outputs.short_sha }}
+          branch: >-
+            auto/bump-${{ steps.validate.outputs.submodule }}-${{ steps.validate.outputs.short_sha }}
+          delete-branch: true
+          title: >-
+            Bump ${{ steps.validate.outputs.submodule }} to
+            ${{ steps.validate.outputs.short_sha }}
+          body: >-
+            Automated: `${{ steps.validate.outputs.submodule }}` merged a
+            commit to its tracked branch.
+
+
+            Bumps the recorded submodule commit to
+            `${{ steps.validate.outputs.sha }}`.
