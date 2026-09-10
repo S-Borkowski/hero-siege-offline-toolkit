@@ -3,12 +3,14 @@
 ## Module Overview & Metadata
 - **Module Name:** ForgePact (Hero Siege Season 10 Offline Mod Panel & BloodPactPlugin)
 - **Submodule Path:** `ForgePact`
-- **Reviewed Git Revision:** `69b65cbda16975277f993bbebb337e0cef89e3c1` (Tag: `v1.3.15`, Branch: `main`)
-- **Revision Date:** `Tue Sep 8 02:14:28 2026 +0300`
-- **Commit Message:** `v1.3.15 notes in plain language: what was broken for players and what is fixed`
+- **Reviewed Git Revision (upstream, `origin`):** `2751679` (Tag: `v1.3.16`, Branch: `main`) — `falorfrozen-cmd/ForgePact`.
+- **Revision Date:** `2026-09-10 09:21:05 +0300`
+- **Commit Message:** `Prepare ForgePact 1.3.16 Headhunter release` — includes upstream's independent fix for the `VALUE_REF` player-resolution bug class in the Headhunter kill/steal path (`HhResolveInstance`, commits `7743a99`/`4ae4e30`), the same bug class described below.
+- **Fork & Branch:** This guide additionally tracks work rebased onto that revision and pushed to `fork` (`S-Borkowski/ForgePact`) as **`release/v1.3.17`** — the version is 1.3.17, not 1.3.16, precisely because upstream had already shipped 1.3.16 by the time this branch was rebased onto it. See `release-notes-v1.3.17.md`.
 - **Source Availability:** Full application source is present (Python control panel `src/forgepact.py`, C++20 native mod plugin `plugin/ModuleMain.cpp`, modified YYToolkit patches `yytoolkit-modified/`, build scripts `plugin_build/build.bat` and `build_release.py`, Python contract tests `tests/`, and reverse-engineering research notes `docs/`).
 - **CI / Pipeline Availability:** **Not available** (no GitHub Actions or remote CI configurations exist; verification is conducted locally via Python unittest test suites and static build audits).
-- **Purpose & Scope:** Standalone offline control panel and native runtime hook plugin providing runtime modifiers for Hero Siege single-player sessions. Controls monster density, special content spawns (Rift Portals, Battlefields, Cursed Orbs, Chaos Tower, Shadow Realm, etc.), drop rate multipliers and gated drop families (Keys, Relics, Angelic/Unholy uniques), player/combat stat scaling, full map reveal, and custom forge mechanics (Headhunter, Tyrant's Crown, Beacon, Item Editor base stat export) without permanently altering save files or the base game executable.
+- **Purpose & Scope:** Standalone offline control panel and native runtime hook plugin providing runtime modifiers for Hero Siege single-player sessions. Controls monster density, special content spawns (Rift Portals, Battlefields, Cursed Orbs, Chaos Tower, Shadow Realm, etc.), drop rate multipliers and gated drop families (Keys, Relics, Angelic/Unholy uniques), gameplay mods (relic drop pool filter excluding maxed 10/10 relics, orb pickup radius), player/combat stat scaling, full map reveal, and custom forge mechanics (Headhunter, Tyrant's Crown, Beacon, Item Editor base stat export) without permanently altering save files or the base game executable. Integrated with `hs-game-sdk`.
+- **Fork Branch vs. This Guide:** `release/v1.3.17` (`fork`) carries the Mods tab (relic filter, orb pickup, the Headhunter/Tyrant's Crown/Beacon/Map Reveal relocation), the build-order packaging guard, the stall watchdog, the `SafeF()` crash guard, and a second, complementary `VALUE_REF` player-resolution fix (`HhUsableInstance`, used by orb pickup and the relic filter's `HhResolveLocalPlayer` calls — distinct from upstream's `HhResolveInstance`, which fixed the same bug class for the Headhunter kill/steal path only). All covered by `tests/test_relic_filter_contract.py` (updated to match the merge) and documented in Known Limitations items 4-9 below; none are optional cleanup, all were needed to reach a working build.
 
 ---
 
@@ -39,6 +41,7 @@
   - `test_necro_balance_contract.py`: Validates Necromancer balance formulas, fail-closed runtime contracts, and panel visibility.
   - `test_release_hook_contract.py`: Validates zero eager gameplay hooks in release builds, all-off pass-through behavior, and telemetry exclusions.
   - `test_repo_bounds_contract.py`: Tests boundary protection and index validation against Season 10 item/relic categories.
+  - `test_relic_filter_contract.py`: Validates the relic drop pool filter, orb pickup radius mod, build-order packaging guard, player-resolution against `VALUE_REF`, the stall watchdog's presence/ordering, and the Map Reveal / Headhunter / Tyrant's Crown / Beacon panel relocation (29 tests; the largest suite, covering everything fixed 2026-09-09/10).
 - `docs/`: Reverse-engineering research logs, memory audits, and drop rate analysis.
   - `S10-special-content-notes.md`: Detailed Season 10 reverse-engineering log for special content spawners, gate mechanisms, crash thresholds, and investigated workarounds.
   - `dungeon-key-research.md`: Documentation of the two-stage key/relic drop architecture (`LoadDrops` outer gate + `droprate.base` inner roll).
@@ -124,7 +127,12 @@ To add or modify a gameplay modifier or runtime command:
      ```powershell
      py build_release.py
      ```
-   - Verify that the packaging guard confirms `modfiles_shipped\BloodPactPlugin.dll` matches `plugin_build\BloodPactPlugin_ship.dll`.
+  - The packaging guard requires `plugin_build\BloodPactPlugin_ship.dll` to exist and confirms that `modfiles_shipped\BloodPactPlugin.dll` matches it. A missing or stale staged plugin stops packaging so the Install button cannot ship an older DLL.
+6. **Write Release Notes (REQUIRED — `release-notes-vX.Y.Z.md`):**
+   - Every version that ships gets a `release-notes-vX.Y.Z.md` file at the ForgePact repo root (`v1.3.1` through `v1.3.15` are the existing precedent — do not skip this for a version bump, however small). Not optional: a version with player-visible changes and no release notes file is an incomplete change.
+   - Player-facing only, in plain language — what was broken and what changed *for the player*, not internal refactors, build-script fixes, or debugging history (that belongs in this instructions.md, e.g. Known Limitations, not in release notes). Match the tone of the existing files: name the symptom before the fix ("Tyrant's Crown and Monster Rarity did nothing in 1.3.14" before explaining why), and give a measured before/after number when one exists.
+   - Standard sections, in order: `## New`, `## Fixed` (either may be omitted if empty, but at least one must be present), then `## How to update` with the standard boilerplate (see any existing file). A `## Changed` section is used for reorganizations (e.g. a control moving to a different panel tab) that are neither strictly new nor a bug fix.
+   - Never claim something is "Fixed" that is not actually resolved. If an investigation concluded the *reported* symptom is not this project's bug (e.g. a freeze traced to a display driver / GPU stall with a control run proving the plugin was not involved), that finding belongs in this instructions.md's Known Limitations, not in release notes as a fix — release notes are read by players deciding whether to update, and an overclaimed fix erodes trust in every note that follows it.
 
 ---
 
@@ -149,7 +157,7 @@ To add or modify a gameplay modifier or runtime command:
 | Command | Working Directory | Shell / Platform | Prerequisites | Expected Result | Side Effects | Status |
 | --- | --- | --- | --- | --- | --- | --- |
 | `py src/forgepact.py` | `ForgePact/` | PowerShell / CMD | Python 3.10+ | Launches local control panel HTTP server (`http://127.0.0.1:8766`). | Opens web browser / desktop window; watches for game process | Verified |
-| `py -m unittest discover -s tests -v` | `ForgePact/` | PowerShell / CMD | Python 3.10+ | Executes all 47 Python contract tests. | Read-only test execution; all tests pass | Verified |
+| `py -m unittest discover -s tests -v` | `ForgePact/` | PowerShell / CMD | Python 3.10+ | Executes all 76 Python contract tests. | Read-only test execution; all tests pass | Verified |
 | `plugin_build\build.bat release` | `ForgePact/` | CMD / PowerShell (Windows x64) | MSVC v143+ (VS 2022), YYToolkit headers in `plugin_build\include\` | Compiles `BloodPactPlugin_ship.dll` with `/DFORGEPACT_RELEASE`. | Generates `plugin_build\BloodPactPlugin_ship.dll` and `obj_ship\` | Inspected |
 | `plugin_build\build.bat` | `ForgePact/` | CMD / PowerShell (Windows x64) | MSVC v143+ (VS 2022), YYToolkit headers in `plugin_build\include\` | Compiles `BloodPactPlugin_rel.dll` (research build with inspection commands). | Generates `plugin_build\BloodPactPlugin_rel.dll` and `obj_dev\` | Inspected |
 | `py build_release.py` | `ForgePact/` | PowerShell / CMD | PyInstaller installed, matching `BloodPactPlugin_ship.dll` | Builds complete release bundle in `dist/ForgePact/`. | Terminates existing `ForgePact.exe` processes; generates onefile executable | Inspected |
@@ -178,7 +186,9 @@ Stores user UI settings in JSON format:
   "map_reveal": true,
   "headhunter": true,
   "tyrant": false,
-  "beacon": false
+  "beacon": false,
+  "mod_filter_max_relics": false,
+  "mod_orb_pickup_radius": false
 }
 ```
 
@@ -192,6 +202,8 @@ UTF-8 / ASCII plain-text command queue. The panel appends lines to `cmd.txt`; th
   - `dungeonkey add 12 1` / `dungeonkey on`: Opens outer LoadDrops gate for Dungeon Keys (type 12).
   - `stat damage 1.25`: Sets damage multiplier to 1.25 (+25%).
   - `mapreveal on` / `mapreveal off`: Toggles full map fog of war clearing.
+  - `relicfilter 1` / `relicfilter 0`: Toggles the relic drop pool filter to exclude relics already at maximum level (10/10) in player equipped slots, backpack, or inventory. Safe to send at launch: it arms the mod and the `DropRelic` hook is installed later, once a player instance exists.
+  - `orbpickup 10` / `orbpickup 0` / `orbpickup stat`: Widens the experience / magic-find globe pickup radius by 10x. `FrameCallback` enumerates the globe instances each frame and pulls any inside the widened radius toward the player at a constant `kGlobePullSpeed` (6 px/frame — tuned down from an accelerating ramp per user feedback 2026-09-10, which snapped the last stretch in a single frame and read as an unnatural teleport); the game's own pickup logic then fires normally once close enough. `orbpickup stat` (also printed when the mod is switched off) reads as a decision tree: `seen=0` while standing next to globes means the object indices are wrong, `noplayer>0` means the player never resolved, and only `outofreach` means the radius is too small — `nearest=` says by how much.
   - `headhunter force` / `tyrant force` / `beacon force`: Activates custom forge mechanic overrides.
   - `enemyspeed 1.5 ct`: Scales enemy movement speed by 1.5x scoped exclusively to Chaos Tower.
 
@@ -237,6 +249,28 @@ The packaging script (`build_release.py`) includes explicit fail-closed safety c
    - Active mechanics like Headhunter, Beacon, and Tyrant's Crown currently rely on `force` commands sent by the panel rather than dynamically reading equipped inventory slots in C++.
 3. **Release vs. Research Command Separation:**
    - Diagnostic commands (`readmem`, `census`, `enemylog`, `probestruct`, `structdump`) are excluded from release builds (`/DFORGEPACT_RELEASE`) to protect performance and stability.
+4. **Build order matters since `build_release.py`'s plugin-sync guard:**
+   - `build_release.py` now refuses to package unless `plugin_build\BloodPactPlugin_ship.dll` exists and byte-matches `modfiles_shipped\BloodPactPlugin.dll` (see `build_release.py`). Always run `plugin_build\build.bat release` (which now auto-stages the DLL into `modfiles_shipped\` and, if present, `dist\ForgePact\modfiles\`) *before* `py build_release.py`. Running the packaging script first, or after editing `plugin/ModuleMain.cpp` without rebuilding, is the most common "build keeps failing" report.
+5. **Hot builtins must stay allocation-free (`distance_to_object`):**
+   - `distance_to_object` is called by every spawner's periodic proximity check, so a hook body that calls into the runner (`asset_get_index`, `object_get_name`) or allocates per call collapses the frame rate. Any builtin hook should follow the shape of `HookICD`: cheap pass-through first, cached integer comparisons after.
+   - Note the calling convention: for a builtin hook, `Args[N]` holds the GML arguments. `Other` is the GML `other` context, **not** the argument — matching an object argument against `Other` silently never fires.
+   - **Measured 2026-09-09:** the globes do **not** reach the player through `distance_to_object` at all. With the player and all four globe objects resolved correctly, a full session shortened **0** distance checks.
+   - **Measured 2026-09-10:** hooking the globe step scripts does not work either. `HookOneScript` reported both `ExpGlobeStepMain` and `MFGlobeStepMain` installed, and the hook body ran **0** times — the globes' step logic is not dispatched through those script-table entries. After two failed interception points, `orbpickup` is driven from `FrameCallback` instead (`OrbPickupTick`), enumerating globe instances with `instance_number` / `instance_find`. The frame callback is known to run because the stall watchdog heartbeats from it. **Prefer this pattern when an interception point is unproven:** drive from the frame callback, which cannot silently not-fire.
+6. **Diagnose stalls with the built-in watchdog, do not guess:**
+   - A multi-second freeze on the character screen was attributed twice to the wrong cause. `ModuleMain.cpp` now carries a stall watchdog in **every** build: a background thread notices when `FrameCallback` stops ticking for 3 s, suspends the frame thread just long enough to read its instruction pointer, and appends `STALL <ms> - frame thread at <module>+<rva>` to `bp_ipc/out.txt`, plus disk bytes and free RAM across the stall. That separates "stuck in BloodPactPlugin" from "stuck in the game" and "machine-wide thrashing" from "waiting on the GPU", with no debugger.
+   - The frame thread is resumed **before** any allocation or formatting. Suspending a thread and then allocating is how this class of tool deadlocks on a heap/CRT/loader lock the stalled thread is holding; keep that ordering if you touch it.
+   - **Measured 2026-09-09, character-select freeze (up to 85 s):** no sample landed in `BloodPactPlugin.dll`. The frame thread was blocked in `ZwWaitForSingleObject`, `ZwQuerySystemInformation`, `NtDxgkSubmitPresentToHwQueue` and `NtGdiDdDDIGetDeviceState` — kernel waits and GPU present/device-state calls — with no display-driver timeout (event 4101) logged. Resolve such addresses by parsing the export table of the named DLL and taking the nearest preceding export; the consistent `+0x14` offset is the syscall stub's return address.
+   - **CONCLUDED — the freeze is not ForgePact.** A control run with `BloodPactPlugin.dll` removed from `mods/aurie/` (Aurie module list: YYToolkit + the game only) froze on the same screen. The same run also still produced the four `Unable to find any instance for object index ...` entries in `YYToolkit.log`, with identical indices and stacks, confirming those are game/YYToolkit noise and not caused by the plugin. Removing the plugin also removes the watchdog, so further measurement needs the out-of-process probe below.
+   - **Measured 2026-09-10, with I/O and memory attached to each stall:** two stalls of ~65 s each showed **0 KB and 1 KB** of game disk reads, and free RAM *rising* by 1.1 GB and 843 MB respectively; sampled instruction pointers were `ZwWaitForSingleObject`, `NtGdiDdDDIGetDeviceState` and `ZwFreeVirtualMemory`. So the freeze is neither disk/anti-virus nor memory pressure — the process is blocked releasing memory and querying GPU device state. Remaining suspects are the display driver / GPU resource teardown, not the game's asset loading and not ForgePact.
+   - **Probe for freezes that are not ours:** `tools/freeze_probe.ps1` (repo root) samples the game from outside — `Process.Responding` to bracket the freeze exactly, plus the game's disk I/O, free RAM and machine-wide CPU busy/idle, ranking processes once per freeze. Its verdict line separates *the machine is thrashing* (AV / paging / disk) from *the game is waiting on the GPU*. Note that per-process CPU via `TotalProcessorTime` or `Get-Counter` costs 1.5–6 s per sweep on a normal machine, which is why the continuous loop uses `GetSystemTimes`/`GetProcessIoCounters` instead.
+7. **`instance_find` returns a REFERENCE, not a number (this broke every player-gated feature):**
+   - **Measured 2026-09-10.** `HhResolveLocalPlayer`'s fallback accepted only `VALUE_REAL`/`VALUE_INT32`/`VALUE_INT64` from `instance_find(Player_obj, 0)`. This runner returns `VALUE_REF` (kind 15), so the fallback **always** failed, and with `GetMyPlayer` also returning a non-`VALUE_OBJECT` value the whole resolver returned false on every call. Everything gated on the local player then silently did nothing: `orbpickup` logged `seen=176993 noplayer=176993`, the relic filter never armed, and the Headhunter head labels reported "local player not found".
+   - An instance reference is passed straight through — `variable_instance_get` accepts it. `HhUsableInstance()` now validates a candidate by *reading a variable from it*, which is what every caller does next, rather than trusting a kind tag. `orbpickup stat` reports `player via GetMyPlayer` / `instance_find(Player_obj)` / `none` so this can never fail silently again.
+   - **Independently, upstream hit the same bug class** in the Headhunter kill/steal path (origin `v1.3.16`, commits `7743a99`/`4ae4e30`/`8005249`) and fixed it there with `HhResolveInstance()` — a `CInstance*` resolver that also accepts `VALUE_REF`, verifies the resolved instance still exists, and checks its `id` matches. The two fixes are complementary, not duplicates: `HhUsableInstance()` validates an `RValue` for callers that only need to read variables from it (orb pickup, the relic filter); `HhResolveInstance()` converts to an actual `CInstance*` for callers that need one (`HhSteal`). `HhSteal`'s own fallback now calls `HhResolveInstance()` on `HhResolveLocalPlayer`'s result rather than the old `p.ToInstance()` (which silently dropped a `VALUE_REF`, same failure mode) — see the merge commit on `release/v1.3.17` for the full reconciliation.
+8. **Mods that install a hook must be armed, not hooked, at launch:**
+   - Installing the `DropRelic` hook while character selection is still running stalls the runner. `relicfilter 1` therefore only sets `g_RelicFilterPending`; `FrameCallback` installs the hook once the `fc > 300` setup gate has passed and `HhResolveLocalPlayer` succeeds. This is what lets `build_cmds` emit the command at launch — an earlier workaround withheld it from `build_cmds` entirely, so the panel toggle stayed on but the mod silently did nothing after a game restart.
+9. **`%f`-family `sprintf_s` on a game-memory-read `double` can abort the process (0xC0000409):**
+   - A stale asset/script index or offset can make a `RValue::ToDouble()` read off game memory (e.g. an item's `droprate.base`) come back as `inf`/`NaN`/an astronomically large finite value. Formatting that with `%f`/`%.Nf` into a fixed `sprintf_s` buffer overruns it and the CRT fast-fails the whole game (`ucrtbase.dll`, exception `0xC0000409` / `STATUS_STACK_BUFFER_OVERRUN`) — this is what shows up as a hard "YYToolkit crash" with no other symptom. `ModuleMain.cpp` has a `SafeF()` helper (clamps non-finite doubles to `0.0`) used at every `droprate`/`dungeonkey` status-print call site and inside `VanilyaBase()` for exactly this reason; if a new command formats a game-read or `std::stod`-parsed double with `%f`, route it through `SafeF()` (or validate with `std::isfinite`) first.
 
 ---
 
@@ -258,3 +292,5 @@ The packaging script (`build_release.py`) includes explicit fail-closed safety c
 - Season 10 Special Content Notes: `../../../ForgePact/docs/S10-special-content-notes.md`
 - Dungeon Key & Drop Research: `../../../ForgePact/docs/dungeon-key-research.md`
 - Angelic Drop Research: `../../../ForgePact/docs/angelic-drop-research.md`
+- Out-of-Process Freeze Probe: `../../../tools/freeze_probe.ps1` (toolkit root, not ForgePact-specific)
+- Release Notes: `../../../ForgePact/release-notes-v*.md` (one per shipped version, v1.3.1 onward; required for every version bump, see Representative Change Workflow)

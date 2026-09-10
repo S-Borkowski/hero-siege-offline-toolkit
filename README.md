@@ -4,7 +4,7 @@ A collection of offline/single-player tools for Hero Siege, created by **Falor**
 
 Explore Cube crafting, edit items and characters, customize offline gameplay,
 track your runs, or launch the game offline. This repository is the central hub
-for all ten tools below.
+for all tools and the shared Game SDK below.
 
 > These tools are intended for offline / single-player use only.
 
@@ -80,10 +80,46 @@ guides for submodules are indexed in [Submodule Development Guides](docs/submodu
 | [HS Value Scanner](https://github.com/falorfrozen-cmd/HS-ValueEditor) | Find and modify in-game values such as Magic Find, movement speed and stacked item counts. | [Download](https://github.com/falorfrozen-cmd/HS-ValueEditor/releases/latest) | [Guide](docs/submodules/HS-ValueEditor/instructions.md) |
 | [HS Offline Loot Forge](https://github.com/falorfrozen-cmd/Hs-Offline-Loot-Forge) | Assist with target farming through offline runtime loot adjustments. | [Download](https://github.com/falorfrozen-cmd/Hs-Offline-Loot-Forge/releases/latest) | [Guide](docs/submodules/Hs-Offline-Loot-Forge/instructions.md) |
 | [HS Steam Deck Save Editor](https://github.com/falorfrozen-cmd/HSSaveEditor-SteamDeck-) | Edit Hero Siege saves through a browser-based interface designed for Steam Deck users. | [Download](https://github.com/falorfrozen-cmd/HSSaveEditor-SteamDeck-/releases/latest) | [Guide](docs/submodules/HSSaveEditor-SteamDeck-/instructions.md) |
+| **HS Game SDK** (`hs-game-sdk/`) | Centralized multi-language SDK (C++, Python, TypeScript) and symbol engine extracted from `Hero_Siege.exe` & `data.win`. | Integrated | [Guide](docs/submodules/hs-game-sdk/instructions.md) |
 
 Each tool is maintained and released in its own repository. Download links follow
 the latest published release automatically; installation steps and supported game
 builds are documented by each project.
+
+---
+
+## HS Game SDK (`hs-game-sdk`)
+
+`hs-game-sdk` is an integral component of the toolkit providing GameMaker objects (6,016), scripts (6,254), assets, stat IDs, and runtime struct models directly to all toolkit submodules.
+
+### Structure & Modules
+* **Python (`hs-game-sdk/python`)**: `hs_game_sdk` package with `GameObject`, `GameScript`, `GameRoom`, `StatId`, `ItemDefinitionStruct`, `ItemStatStruct`.
+* **C++ Headers (`hs-game-sdk/cpp/include/hs_game_sdk`)**: Strongly-typed enums, constexpr script names, and YYToolkit wrappers (`hs_game_sdk.hpp`, `yytk_helpers.hpp`).
+* **TypeScript (`hs-game-sdk/ts`)**: `@hero-siege/sdk` with typed object ID mappings and stat constants for web modules.
+
+### Extraction & Re-generation
+Extract symbols and generate SDK bindings from a local Hero Siege installation:
+```powershell
+py -3 tools/extract_and_generate_sdk.py --game-bin "C:\Program Files (x86)\Steam\steamapps\common\HeroSiege\bin"
+```
+
+---
+
+## Diagnostics
+
+`tools/freeze_probe.ps1` samples a running game process from outside it — useful
+when a submodule's own logging can't tell whether a freeze is in that submodule,
+the game, or the machine (display driver, anti-virus, paging). It brackets a
+freeze precisely with `Process.Responding`, and records disk I/O, free RAM, and
+machine-wide CPU busy/idle across it, printing a verdict at the end:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/freeze_probe.ps1
+```
+
+Then launch the game and reproduce the freeze; Ctrl+C when done. See
+[ForgePact's instructions](docs/submodules/ForgePact/instructions.md) for a
+worked example (Known Limitations, stall watchdog section).
 
 ---
 

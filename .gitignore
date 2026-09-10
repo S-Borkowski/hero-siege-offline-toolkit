@@ -1,0 +1,79 @@
+# Root .gitignore for Hero Siege Offline Toolkit & hs-game-sdk
+
+# Game Binaries and Proprietary Assets
+*.exe
+*.dll
+*.win
+data.win
+*.yytex
+*.audiogroup*
+*.png
+*.ogg
+*.wav
+*.ttf
+*.otf
+
+# Extracted Raw Game Data Dumps
+hs-game-sdk/data/
+**/data/raw/
+**/raw/
+**/extracted/
+
+# Decompiler / disassembler artifacts — never committed, see "Legal: No
+# Decompiled Code in Any Origin" in agents.md. Names + indices go through
+# hs-game-sdk instead; full script/disassembly dumps stay on the researcher's
+# machine only.
+*.i64
+*.idb0
+*.idb1
+*.til
+*.gpr
+*.rep/
+**/ghidra_projects/
+**/UndertaleModTool_Export/
+**/decompiled/
+**/disassembly/
+*.dis
+
+# Python Build, Bytecode & Environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# C++ Build Artifacts & Intermediate Files
+*.obj
+*.lib
+*.exp
+*.pdb
+*.ilk
+*.idb
+bin/
+out/
+x64/
+x86/
+
+# Node / TypeScript / Web Build
+node_modules/
+ts/dist/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# IDE & OS Specific Files
+.DS_Store
+Thumbs.db
+.vs/
+.idea/
+.vscode/
+
+# Junie agent plans/session files (local planning aid, not project docs)
+.junie/

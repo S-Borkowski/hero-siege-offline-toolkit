@@ -18,6 +18,8 @@ This directory serves as the centralized repository for development, architectur
 | **HS Offline Loot Forge** | `Hs-Offline-Loot-Forge/` | [Hs-Offline-Loot-Forge Instructions](Hs-Offline-Loot-Forge/instructions.md) | Ready | Runtime loot table adjustments and targeted farming assistant. |
 | **Hero Siege Item Editor** | `hero-siege-item-editor/` | [hero-siege-item-editor Instructions](hero-siege-item-editor/instructions.md) | Ready | Item creator, stash editor, and inventory customizer. |
 | **HS Offline Stat Forge** | `hs-stat-forge/` | [hs-stat-forge Instructions](hs-stat-forge/instructions.md) | Ready | Runtime character stat tuner and monster density modifier. |
+| **HS Game SDK** | `hs-game-sdk/` | [HS Game SDK Instructions](hs-game-sdk/instructions.md) | Ready | Centralized cross-language SDK and metadata library for GameMaker objects, scripts, assets, and runtime models. |
+| **Runtime Data Models** | `docs/` | [Runtime Data Models & Cheat-Sheet](../RUNTIME_DATA_MODELS.md) | Ready | Reverse-engineered Season 10 memory models, player instance structs, equipment slots, and drop tables. |
 
 ---
 
@@ -29,7 +31,8 @@ Submodule development instructions adhere to the following authoring principles:
 2. **Deterministic Command Metadata:** Commands in the reference tables specify exact working directories, shells, prerequisites, side effects, and verification statuses (`Verified`, `Inspected`, or `Blocked`).
 3. **Safety & Fail-Closed Operations:** Guides document offline-only constraints, anti-cheat isolation (EAC disabled), non-destructive save handling, and atomic backup/restoration mechanisms.
 4. **Modified Upstream Provenance:** Modifications to third-party or upstream dependencies (such as Aurie or YYToolkit) must document exact change locations, compilation flags, and AGPL-3.0 compliance notices.
-5. **Standard Outline Structure:**
+5. **No Decompiled Game Code:** Research notes document measured runtime *behavior* (what a function does, observed crash signatures, memory layout) and reference game objects/scripts by the names and indices in `hs-game-sdk` — never by pasting decompiled or disassembled Hero Siege source. See "Legal: No Decompiled Code in Any Origin" in the root [`agents.md`](../../agents.md) for the full rule and what is/isn't safe to commit.
+6. **Standard Outline Structure:**
    - Module Overview & Metadata
    - Architecture & Repository Map
    - Representative Change Workflow
