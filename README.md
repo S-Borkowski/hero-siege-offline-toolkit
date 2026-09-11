@@ -153,6 +153,16 @@ Add Context7 to your MCP client configuration (such as Claude Desktop, Cursor, o
 
 For more details on Context7 indexing and query capabilities, consult the [Context7 Documentation](https://github.com/context7/context7).
 
+## Design Notes & Future Work
+
+Longer-form notes that are deliberately *not* on the roadmap — kept so the reasoning
+isn't re-derived from scratch later. Nothing here is implemented.
+
+- [Steam ownership gating & offline integrity](docs/ownership-and-offline-integrity-plan.md)
+  — why Easy Anti-Cheat and exe-patching mods can never coexist, why EAC was never the
+  anti-piracy layer in the first place, and what a real Steam ownership check in
+  `HS-Offline-Launcher` would look like if the toolkit ever wanted one.
+
 ## Notes
 
 - Offline / single-player use only
