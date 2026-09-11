@@ -1,0 +1,61 @@
+[package]
+name = "hero-siege-toolkit-hub"
+version = "0.1.0"
+description = "Installs, launches and updates every tool in the Hero Siege Offline Toolkit"
+authors = ["falorfrozen-cmd"]
+license = "MIT"
+edition = "2021"
+# Matching HS-Offline-Tracker's floor. Ubuntu 24.04's apt rustc is 1.75 and
+# reads the newer library methods as missing rather than as an old compiler,
+# so say the number rather than let the error be mysterious.
+rust-version = "1.88"
+
+[lib]
+name = "hero_siege_toolkit_hub_lib"
+# The template ships staticlib and cdylib for mobile targets. This is a desktop
+# app; main.rs links the rlib and nothing else is built.
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+# One hub at a time: two copies would race over state.json and over the same
+# install directories.
+tauri-plugin-single-instance = "2"
+tauri-plugin-updater = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+# The catalog's trust root. This is the same crate the Tauri updater uses to
+# check its own signatures, so it is already in the dependency tree.
+minisign-verify = "0.2"
+ureq = { version = "2", features = ["tls"] }
+sysinfo = "0.33"
+
+[target.'cfg(windows)'.dependencies]
+# ShellExecuteExW with the `runas` verb: the hub stays non-elevated and asks
+# Windows to elevate the three tools that need SeDebugPrivilege, per launch.
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Threading",
+    # SHELLEXECUTEINFOW carries an `hkeyClass: HKEY`, so the struct itself is
+    # gated behind the registry feature even though nothing here reads it.
+    "Win32_System_Registry",
+] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+
+[lints.rust]
+# The MSVC linker prints an informational line when it creates the import
+# library, and rustc surfaces it as a warning on every single build.
+linker_messages = "allow"
