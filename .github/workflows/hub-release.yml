@@ -1,0 +1,135 @@
+# Build, sign and publish the Toolkit Hub, plus the latest.json its updater reads.
+name: Hub release
+
+on:
+  push:
+    tags:
+      - 'hub-v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build and test without publishing a release'
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hub-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Everything that can fail for a reason unrelated to packaging, failing first
+  # and on a cheap runner.
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Catalog generator and signer tests
+        run: python -m unittest discover -s tests
+
+      # The hub embeds catalog.json and verifies it against the embedded public
+      # key at startup. A release built from a catalog and signature that
+      # disagree would install and then refuse to show a library, so it is
+      # checked here rather than discovered by a player.
+      - name: The committed catalog verifies against the committed key
+        run: |
+          python tools/minisign.py verify catalog/catalog.json \
+            --public-key catalog/catalog-signing.pub
+
+  build:
+    needs: check
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: hub/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: hub/src-tauri
+
+      - name: Install frontend dependencies
+        working-directory: hub
+        run: npm ci
+
+      - name: Rust tests
+        working-directory: hub
+        run: npm test
+
+      - name: Build the frontend
+        working-directory: hub
+        run: npm run build
+
+      # The tag is the version. Two places already claim one -- package.json and
+      # tauri.conf.json -- and a release whose three numbers disagree is a hub
+      # that reports the wrong version in About and compares wrongly against
+      # latest.json.
+      - name: The tag, package.json and tauri.conf.json agree
+        if: startsWith(github.ref, 'refs/tags/hub-v')
+        shell: bash
+        run: |
+          tag="${GITHUB_REF#refs/tags/hub-v}"
+          pkg=$(node -p "require('./hub/package.json').version")
+          conf=$(node -p "require('./hub/src-tauri/tauri.conf.json').version")
+          echo "tag=$tag package.json=$pkg tauri.conf.json=$conf"
+          if [ "$tag" != "$pkg" ] || [ "$tag" != "$conf" ]; then
+            echo "::error::the tag and the manifests disagree about the version"
+            exit 1
+          fi
+
+      - name: Build, sign and publish
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The updater will not accept an unsigned bundle: tauri.conf.json
+          # carries the matching public key. Without this secret the build
+          # produces an installer whose updates can never be verified.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: hub
+          tagName: hub-v__VERSION__
+          releaseName: 'Hero Siege Toolkit v__VERSION__'
+          releaseBody: |
+            The hub that installs, launches and updates the ten tools.
+
+            Windows SmartScreen will warn about this download: there is no
+            code-signing certificate for this project, and there is none for any
+            of the ten tools either. What the hub offers instead is a SHA-256 for
+            every artifact it installs, pinned in a catalog signed with a key
+            built into the application.
+
+            Installing the hub changes nothing about tools you already have, and
+            uninstalling it never touches a tool's settings, saves or backups.
+          releaseDraft: true
+          prerelease: false
+          # latest.json is what the updater endpoint in tauri.conf.json points
+          # at. Without it the hub can be installed but never updates itself.
+          includeUpdaterJson: true
+          args: ${{ github.event.inputs.dry_run == 'true' && '--no-bundle' || '' }}
+
+      - name: Keep the installer as an artifact on a dry run
+        if: github.event.inputs.dry_run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: hub-dry-run
+          path: |
+            hub/src-tauri/target/release/bundle/**/*
+          if-no-files-found: ignore
+          retention-days: 7
