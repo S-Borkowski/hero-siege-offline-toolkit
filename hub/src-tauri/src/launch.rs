@@ -166,7 +166,7 @@ fn spawn_elevated(entry: &Path, args: &[String], cwd: &Path) -> Result<u32> {
     info.lpVerb = verb.as_ptr();
     info.lpFile = file.as_ptr();
     info.lpDirectory = directory.as_ptr();
-    info.nShow = SW_SHOWNORMAL as i32;
+    info.nShow = SW_SHOWNORMAL;
     if let Some(parameters) = parameters.as_ref() {
         info.lpParameters = parameters.as_ptr();
     }
@@ -242,7 +242,7 @@ fn open_document(path: &Path) -> Result<()> {
             file.as_ptr(),
             std::ptr::null(),
             std::ptr::null(),
-            SW_SHOWNORMAL as i32,
+            SW_SHOWNORMAL,
         )
     };
     // ShellExecuteW returns a value greater than 32 on success. The API is old

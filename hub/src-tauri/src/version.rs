@@ -76,7 +76,7 @@ mod tests {
         assert!(is_newer("2.15.4", "2.15.3"));
         assert!(is_newer("1.4.1", "1.4.0"));
         assert!(!is_newer("1.0.2", "1.0.2"));
-        assert!(is_newer("2.7.9", "2.7.10") == false);
+        assert!(!is_newer("2.7.9", "2.7.10"));
     }
 
     #[test]

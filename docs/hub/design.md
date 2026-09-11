@@ -284,13 +284,37 @@ cd hub && npm run build               # the frontend
 cd hub && npm start                   # the app
 ```
 
-Things worth checking by hand, because they are the ones that matter and the
-ones a unit test cannot reach:
+`tests/install_e2e.rs` drives the whole install pipeline over real HTTP against a
+server the test owns, so the loop needs no release and works offline.
 
-- Install ForgePact from its real release; confirm the extracted tree is
-  `ForgePact.exe` + `modfiles/`, matching `build_release.py`'s documented layout.
-- Launch it; confirm `http://127.0.0.1:8766/` answers and the card says
-  *Running*; Stop it.
+### Against the real releases
+
+Ignored by default, because `cargo test` should not download 210 MB on every run.
+They exist because the fixtures can only prove the pipeline is self-consistent —
+they cannot prove `sources.toml` still describes the releases correctly, and that
+is the part most likely to rot.
+
+```bash
+cd hub
+cargo test --manifest-path src-tauri/Cargo.toml --test real_release -- --ignored --nocapture
+```
+
+`forgepact_installs_from_its_real_release` additionally asserts the extracted tree
+is `ForgePact.exe` beside `modfiles/{AurieCore,YYToolkit,BloodPactPlugin}.dll` and
+`AuriePatcher.exe`, which is what `build_release.py` documents.
+
+Last run: all ten installed, and every entry point was where the catalog said.
+
+### Still worth doing by hand
+
+The parts no test reaches, because they need the game, elevation, or a person
+watching:
+
+- Launch ForgePact from the hub; confirm `http://127.0.0.1:8766/` answers, the
+  card turns to *Running*, and Stop ends it.
+- Launch one of the three elevating tools: the UAC prompt should appear once,
+  declining it should read as a decision rather than an error, and accepting it
+  should still yield a card that says *Running* and can be stopped.
 - Corrupt one `sha256` in `catalog/catalog.json`, re-sign, and confirm the
   install **refuses** rather than falling through.
 - Start `Hero_Siege.exe`, trigger an auto-install, confirm it stages rather than
@@ -298,6 +322,7 @@ ones a unit test cannot reach:
 - Toggle Work offline and confirm zero outbound requests on launch.
 - `tools/freeze_probe.ps1` if a hub-launched tool is suspected of stalling the
   game — the existing instrument, not a new one.
+
 
 ## Out of scope
 
