@@ -7,17 +7,23 @@ When developing, modifying, testing, or investigating code within any submodule 
 - Check for submodule-specific development guides located at `docs/submodules/<submodule-name>/instructions.md` (or `<submodule-name>/instructions.md` if present within the directory).
 - Adhere to the documented architecture, entry points, workflows, testing procedures, dependencies, and command conventions outlined in the relevant `instructions.md`.
 
-## Legal: No Decompiled Code in Any Origin
+## Legal: Decompiled Output Never Reaches Any Origin
 
 This toolkit reverse-engineers Hero Siege's runtime (memory layout, hooked functions,
-GameMaker object/script indices) to build offline tools. That research must never
-turn into copied source code landing in a repository that gets pushed to its origin
-(this includes every submodule's own remote, not just this hub).
+GameMaker object/script indices) to build offline tools. **The constraint is entirely
+about output, not technique**: decompiling or disassembling the game locally — reading
+a script body in Ghidra/IDA/UndertaleModTool/dnSpy to understand what a mechanism does —
+is not restricted and is a legitimate research step when static name/hierarchy search
+and live measurement (hooking, tracing, before/after diffing) run out, same as the rest
+of this toolkit's reverse-engineering. What must never happen is for that output to
+land in a repository that gets pushed to its origin (this includes every submodule's
+own remote, not just this hub) — see the hard rule below.
 
 **Hard rule: never commit, paste, or embed decompiled or disassembled Hero Siege
 source (GML script bodies, decompiled bytecode, IDA/Ghidra/UndertaleModTool
 listings or exports, disassembly dumps) into any tracked file.** This applies to
-production code, `docs/` research notes, commit messages, and comments alike.
+production code, `docs/` research notes, commit messages, and comments alike — write
+up *what was learned*, in your own words, never the decompiled text itself.
 
 What is fine to commit — because it documents *interoperability facts*, not the
 game's copyrightable expression:
@@ -85,6 +91,66 @@ edit-verify loop expensive. Before or alongside mod development:
   mod iteration.
 - Reserve full rebuild + in-game relaunch cycles for final confirmation once
   the baseline/target tests above already pass against the faster loop.
+
+**This was not respected closely enough during Pet Quest Collector's Phase 0
+research (2026-09-10)**: candidate interaction hooks were added and tested
+one small batch at a time - a named script, then five more named scripts,
+then seven anonymous closures on one object, then two builtins, then nine
+more anonymous closures on a second object - each round costing its own
+rebuild, DLL swap, full game relaunch, and a live collect from the tester.
+Several of those rounds could have been one round: `hs-game-sdk`'s static
+name/hierarchy search (`grep` over `scripts.hpp`/`objects.hpp`, or the
+Python/C++ bindings) can enumerate *every* plausibly-relevant script or
+object *before* touching the game at all, and costs nothing to run
+repeatedly. When a live research session's goal is "find which of several
+unknown candidates does X" (not "verify one already-suspected mechanism"):
+- Exhaust the static search first: every name matching the concept (by
+  substring, by shared object/parent, by shared event) across
+  `scripts.hpp`/`objects.hpp`, not just the one name the plan or a prior
+  guess assumed. Read `hs-game-sdk`'s existing research docs
+  (`ForgePact/docs/*-research.md`) for the technique already proven there -
+  e.g. "every script-table entry inside `<object>`'s own Create event" found
+  every anonymous closure GameMaker split out of that object, cheaply, with
+  no live session.
+- Hook every candidate that search turns up in the *same* build, gated
+  together behind one research command, before asking for a single relaunch.
+  A hook that turns out irrelevant costs one `HookOneScript`/`HookBuiltin`
+  call and a few log lines - far cheaper than a round trip that could have
+  included it.
+- Only fall back to a narrower, more expensive technique (e.g. hooking hot
+  builtins instead of named scripts) after the broad static-search round has
+  been exhausted and come back empty, and even then, hook every plausible
+  builtin candidate at once rather than one per relaunch.
+
+## Prove the Instrument Before Trusting a Negative Result
+
+The batching advice above is necessary but was not sufficient, and the reason
+is worth its own rule. The same Pet Quest Collector research went on to spend
+several more sessions on a *false negative*: 34 hooked call sites reporting
+**0 calls** across multiple confirmed, observed collects. The conclusion drawn
+- "the game does not call any of these" - was wrong. `HookOneScript` installs
+by swapping a pointer inside the script-table entry, and this game's compiled
+GML calls another script with a direct `call rel32` bound at compile time,
+which never reads that table. **Every one of those zeros measured the
+instrument, not the game** (`ForgePact/docs/pet-quest-collector-c-research.md`,
+"The hooks were blind"). Two whole mechanisms were abandoned on that evidence.
+
+So, before a "0 calls" / "no effect" / "never fires" result is allowed to
+close a line of investigation:
+- **Run a positive control through the same instrument.** Point it at
+  something you already know fires - in this case any hook that had ever
+  logged a call - in the same build, in the same session. An instrument that
+  cannot produce a non-zero anywhere has told you nothing about your target.
+- **Know how your instrument attaches, and whether the code under test can
+  reach it.** Table-swap hooks (`HookOneScript`) only see calls that go
+  through the table; address-patching hooks (`MmCreateHook`, as used by
+  `HookBuiltin` and `citrace nativetrace`) see the call itself. Prefer the
+  latter whenever a table-based hook reports zero, before concluding anything
+  about the game.
+- **Write the negative down as "not observed", not "does not happen"**, until
+  a control backs it. Research docs in this repo are read later as settled
+  fact; a mislabeled negative costs more sessions than the one that produced
+  it.
 
 ## Documentation & Instructions Maintenance
 
