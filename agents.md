@@ -240,6 +240,53 @@ and did nothing". Those two outputs turned a hypothesis that would have cost a
 research session into two launches. A mod that fails silently is a mod nobody
 can debug from a bug report.
 
+## Don't Suspend the Game's Own Runtime
+
+Every mod in this toolkit that works does one of two things: it **reads** game
+state, or it **changes one value inside a call the game is already making** — a
+`droprate.base` divided before the game's own die is rolled, a base speed scaled
+for the duration of one `PathFindStartPath`, a marker object multiplied so the
+game places and runs the mechanic itself. The game stays in charge of its own
+loop throughout.
+
+**Features that take the loop away from the game are not recommended**: pause,
+time scaling or slow-motion, save-state/rewind, forced state restore, freezing
+or wholesale deactivating instances — anything whose contract is "suspend the
+world and give it back unchanged". They are a different risk class, and the
+reasons are structural rather than a matter of implementation quality:
+
+- **The failure mode inverts.** Ordinary mods fail by doing nothing (a dead
+  `relicgate`, a collect that never fires). A suspension feature fails by
+  leaving the player's session stuck, or by letting the game save while its own
+  state is half-removed. When a design needs a panic hotkey, a watchdog and a
+  fail-open path on every branch before it can ship, that machinery is the
+  signal, not the mitigation.
+- **The precise instruments are unavailable on this build.** YYToolkit's
+  per-event hook (`EVENT_OBJECT_CALL`) is deliberately disabled in the
+  YYToolkit this project ships — it crash-looped on Season 10 — and
+  named-script hooks are structurally blind against this YYC build's direct
+  calls (see the section above). What remains is blunt, whole-subtree
+  instance deactivation, with the widest possible blast radius.
+- **The claim cannot be verified.** "Everything stops" is a statement about
+  every timer, DoT, cooldown and internal counter in the game, including the
+  ones nobody has enumerated. Contract tests can pin the mod's own structure;
+  they cannot establish that. A miss surfaces as a buff that quietly expired or
+  a cooldown that quietly advanced — wrongness a player reports months later as
+  "the mod broke my character".
+- **It taxes every future game patch.** Anything that has to know the game's
+  full object or UI surface (which windows count as a menu, which objects are
+  actors) is upkeep on someone else's release schedule.
+
+The worked example is `ForgePact/docs/menu-pause-plan.md` — a complete design
+for "pause the world while a menu is open", researched to the point where the
+mechanism was clear, and **not recommended for implementation** for exactly the
+reasons above. Read its §0 before proposing anything in this class; if one is
+built anyway, that is a deliberate decision to accept those risks, and it
+belongs in the submodule's Known Limitations with the acceptance recorded.
+
+Prefer the alternatives: read-only tooling outside the game, a change to one
+value the game is about to use, or leaving the behaviour alone.
+
 ## Documentation & Instructions Maintenance
 
 Upon completing any task or making changes to features, workflows, architecture, or dependencies:
