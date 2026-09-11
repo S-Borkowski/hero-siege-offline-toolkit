@@ -1,0 +1,340 @@
+# Toolkit Hub — per-tool catalog source rules.
+#
+# Hand-maintained. `tools/build_catalog.py` reads this, resolves each repo's
+# latest GitHub release, picks the one asset matching `asset_pattern`, pins its
+# SHA-256, and writes `catalog/catalog.json`.
+#
+# Why every field is declared rather than inferred: the ten repos agree on no
+# naming convention at all. `ForgePact-1.3.16.zip` sits beside
+# `HeroSiegeItemEditor-v2.15.4-s10.exe`, `hs-offline-tracker-0.1.2-portable.zip`
+# and a bare `HSCraftSim.exe`; HSCraftSim publishes seven assets and hs-stat-forge
+# three, so "the asset" is a choice, not a lookup. See docs/adr/0001-repo-topology.md
+# and D3 in docs/toolkit-hub-plan.md.
+#
+# The git tag is the authoritative version. HS-ValueEditor's tag `v1.0.2` ships an
+# asset called `HSValueScanner-Windows-v1.0.1.zip`; the catalog says 1.0.2.
+
+schema = 1
+
+# ---------------------------------------------------------------------------
+
+[[tool]]
+id = "forgepact"
+name = "ForgePact"
+summary = "Offline gameplay modifiers: density, spawns, drop rates, map reveal."
+repo = "falorfrozen-cmd/ForgePact"
+submodule = "ForgePact"
+license = "AGPL-3.0"
+guide = "docs/submodules/ForgePact/instructions.md"
+asset_pattern = '^ForgePact-[0-9][^/]*\.zip$'
+kind = "zip"
+
+[tool.requires]
+admin = false
+game_closed = false
+game_running = false
+windows_only = true
+
+# build_release.py produces dist/ForgePact/{ForgePact.exe,modfiles/} and zips that
+# folder, so the archive carries a ForgePact/ root. Left for the generator to
+# derive by probing rather than asserted here.
+[tool.launch]
+exe = "ForgePact.exe"
+args = []
+elevate = false
+ports = [8766, 8780, 8801, 8899, 9133, 9777]
+
+[tool.launch.health]
+url = "http://127.0.0.1:8766/"
+timeout_s = 20
+
+[tool.source_launch]
+cmd = "py"
+args = ["-3", "src/forgepact.py"]
+
+# ---------------------------------------------------------------------------
+
+[[tool]]
+id = "hero-siege-item-editor"
+name = "Hero Siege Item Editor"
+summary = "Item creator, stash editor and inventory customizer."
+repo = "falorfrozen-cmd/hero-siege-item-editor"
+submodule = "hero-siege-item-editor"
+license = "NOASSERTION"
+guide = "docs/submodules/hero-siege-item-editor/instructions.md"
+asset_pattern = '^HeroSiegeItemEditor-v[0-9][^/]*\.exe$'
+kind = "exe"
+
+[tool.requires]
+admin = false
+game_closed = true
+game_running = false
+windows_only = true
+
+[tool.launch]
+exe = "HeroSiegeItemEditor.exe"
+args = []
+elevate = false
+ports = [8765]
+
+# /api/instance answers {version, pid, port} — reuse it rather than inventing a
+# hub-specific liveness protocol (hs_item_editor_gui.py:10271).
+[tool.launch.health]
+url = "http://127.0.0.1:8765/api/instance"
+timeout_s = 25
+
+[tool.source_launch]
+cmd = "py"
+args = ["-3", "hs_item_editor_gui.py"]
+
+# ---------------------------------------------------------------------------
+
+[[tool]]
+id = "hs-offline-tracker"
+name = "HS Offline Tracker"
+summary = "Loot journal, drop alerts and an always-on-top run overlay."
+repo = "falorfrozen-cmd/HS-Offline-Tracker"
+submodule = "HS-Offline-Tracker"
+license = "MIT"
+guide = "docs/submodules/HS-Offline-Tracker/instructions.md"
+# The same release also ships an NSIS setup. The hub installs per-user into its
+# own tree and never runs an installer, so the portable zip is the one it takes.
+asset_pattern = '^hs-offline-tracker-[0-9][^/]*-portable\.zip$'
+kind = "zip"
+
+[tool.requires]
+admin = false
+game_closed = false
+game_running = false
+windows_only = true
+
+# The portable zip carries the Cargo package name, not tauri.conf.json's
+# productName -- the NSIS setup is what installs "HS Offline Tracker.exe".
+[tool.launch]
+exe = "hs-offline-tracker.exe"
+args = []
+elevate = false
+ports = []
+
+[tool.source_launch]
+cmd = "npm"
+args = ["start"]
+
+# ---------------------------------------------------------------------------
+
+[[tool]]
+id = "hs-offline-launcher"
+name = "HS Offline Launcher"
+summary = "Finds your Steam install and starts Hero Siege offline, EAC disabled."
+repo = "falorfrozen-cmd/HS-Offline-Launcher"
+submodule = "HS-Offline-Launcher"
+license = "MIT"
+guide = "docs/submodules/HS-Offline-Launcher/instructions.md"
+asset_pattern = '^HS-Offline-Launcher\.exe$'
+kind = "exe"
+
+[tool.requires]
+admin = false
+game_closed = true
+game_running = false
+windows_only = true
+
+[tool.launch]
+exe = "HS-Offline-Launcher.exe"
+args = []
+elevate = false
+ports = [8861, 8862, 8863, 8961]
+
+# The launcher binds an HMAC token per process, so an unauthenticated probe gets
+# a 401/403 rather than a 200. Any HTTP status means the server is listening,
+# which is the only question the hub is asking.
+[tool.launch.health]
+url = "http://127.0.0.1:8861/"
+timeout_s = 20
+any_status = true
+
+[tool.source_launch]
+cmd = "py"
+args = ["-3", "src/hs_offline_launcher.py"]
+
+# ---------------------------------------------------------------------------
+
+[[tool]]
+id = "hscraftsim"
+name = "HSCraftSim"
+summary = "Cube crafting simulator with the full recipe database."
+repo = "falorfrozen-cmd/HSCraftSim"
+submodule = "HSCraftSim"
+license = "NOASSERTION"
+guide = "docs/submodules/HSCraftSim/instructions.md"
+# Seven assets in this release: a source zip, a research-scripts zip, three
+# checksum sidecars, a bare .exe and the packaged Windows build. Only the last
+# one is a runnable tree.
+asset_pattern = '^HSCraftSim-[0-9][^/]*-Windows-x64\.zip$'
+kind = "zip"
+
+[tool.requires]
+admin = false
+game_closed = false
+game_running = false
+windows_only = true
+
+[tool.launch]
+exe = "HSCraftSim.exe"
+args = []
+elevate = false
+ports = [17870, 17871, 17872, 17873, 17874, 17875, 17876, 17877, 17878, 17879]
+
+[tool.launch.health]
+url = "http://127.0.0.1:17870/_health"
+timeout_s = 25
+
+[tool.source_launch]
+cmd = "py"
+args = ["-3", "server.py", "--no-browser"]
+
+# ---------------------------------------------------------------------------
+
+[[tool]]
+id = "hssaveeditor"
+name = "HS Save Editor"
+summary = "Character save editor for offline saves, with automatic backups."
+repo = "falorfrozen-cmd/HSSaveEditor"
+submodule = "HSSaveEditor"
+license = "NOASSERTION"
+guide = "docs/submodules/HSSaveEditor/instructions.md"
+asset_pattern = '^HSSaveEditor-Windows-v[0-9][^/]*\.zip$'
+kind = "zip"
+
+[tool.requires]
+admin = false
+game_closed = true
+game_running = false
+windows_only = true
+
+# Tkinter: no HTTP surface, so there is nothing to probe. The hub falls back to
+# "the process is still alive" for these.
+[tool.launch]
+exe = "HeroSiegeSaveEditor.exe"
+args = []
+elevate = false
+ports = []
+
+[tool.source_launch]
+cmd = "py"
+args = ["-3", "hs_save_editor.py"]
+
+# ---------------------------------------------------------------------------
+
+[[tool]]
+id = "hssaveeditor-steamdeck"
+name = "HS Steam Deck Save Editor"
+summary = "Browser-based save editor for Steam Deck and handheld players."
+repo = "falorfrozen-cmd/HSSaveEditor-SteamDeck-"
+submodule = "HSSaveEditor-SteamDeck-"
+license = "NOASSERTION"
+guide = "docs/submodules/HSSaveEditor-SteamDeck-/instructions.md"
+asset_pattern = '^HSSaveEditor-SteamDeck-Web-v[0-9][^/]*\.zip$'
+kind = "html"
+
+[tool.requires]
+admin = false
+game_closed = true
+game_running = false
+windows_only = false
+
+# kind = "html": the hub opens this in the default browser instead of spawning a
+# process, so there is no PID to track and no Running state.
+[tool.launch]
+exe = "HSSaveEditor.html"
+args = []
+elevate = false
+ports = []
+
+# ---------------------------------------------------------------------------
+
+[[tool]]
+id = "hs-value-editor"
+name = "HS Value Scanner"
+summary = "Memory value scanner and offline runtime value editor."
+repo = "falorfrozen-cmd/HS-ValueEditor"
+submodule = "HS-ValueEditor"
+license = "NOASSERTION"
+guide = "docs/submodules/HS-ValueEditor/instructions.md"
+# Tag v1.0.2 ships an asset still named v1.0.1. The pattern deliberately does not
+# interpolate the version, because here the two disagree.
+asset_pattern = '^HSValueScanner-Windows-v[0-9][^/]*\.zip$'
+kind = "zip"
+
+[tool.requires]
+admin = true
+game_closed = false
+game_running = true
+windows_only = true
+
+[tool.launch]
+exe = "HSValueScanner.exe"
+args = []
+elevate = true
+ports = []
+
+# No source_launch: this repository contains a built .exe and nothing else.
+
+# ---------------------------------------------------------------------------
+
+[[tool]]
+id = "hs-offline-loot-forge"
+name = "HS Offline Loot Forge"
+summary = "Runtime loot-table adjustments and a targeted farming assistant."
+repo = "falorfrozen-cmd/Hs-Offline-Loot-Forge"
+submodule = "Hs-Offline-Loot-Forge"
+license = "NOASSERTION"
+guide = "docs/submodules/Hs-Offline-Loot-Forge/instructions.md"
+asset_pattern = '^HSOfflineLootForge-v[0-9][^/]*\.zip$'
+kind = "zip"
+
+[tool.requires]
+admin = true
+game_closed = false
+game_running = true
+windows_only = true
+
+[tool.launch]
+exe = "HSOfflineLootForge.exe"
+args = []
+elevate = true
+ports = []
+
+# No source_launch: binary-only repository.
+
+# ---------------------------------------------------------------------------
+
+[[tool]]
+id = "hs-stat-forge"
+name = "HS Offline Stat Forge"
+summary = "Runtime character stat tuner and monster density modifier."
+repo = "falorfrozen-cmd/hs-stat-forge"
+submodule = "hs-stat-forge"
+license = "NOASSERTION"
+guide = "docs/submodules/hs-stat-forge/instructions.md"
+asset_pattern = '^HS-Offline-Stat-Forge-v[0-9][^/]*\.zip$'
+kind = "zip"
+
+[tool.requires]
+admin = true
+game_closed = false
+game_running = true
+windows_only = true
+
+# HSStatForge.spec sets uac_admin=True, so the frozen exe asks for elevation on
+# its own; declaring it here stops the hub spawning it non-elevated and having
+# Windows fail the CreateProcess with ERROR_ELEVATION_REQUIRED.
+[tool.launch]
+exe = "HSStatForge.exe"
+args = []
+elevate = true
+ports = []
+
+[tool.source_launch]
+cmd = "py"
+args = ["-3", "hs_statforge.py"]
