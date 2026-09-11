@@ -267,7 +267,7 @@ fn check_for_updates(app: AppHandle, hub: State<'_, Arc<Hub>>) -> Result<Library
 fn install_tool(app: AppHandle, hub: State<'_, Arc<Hub>>, id: String) -> Result<(), String> {
     let tool = hub.tool(&id)?;
     let settings = hub.settings();
-    if !settings.may_reach_network() && !bundled_artifact(&hub, &tool).is_some() {
+    if !settings.may_reach_network() && bundled_artifact(&hub, &tool).is_none() {
         return Err(
             "Work offline is on and this artifact is not in the offline bundle.".into(),
         );

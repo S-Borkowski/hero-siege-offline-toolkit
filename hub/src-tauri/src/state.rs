@@ -231,8 +231,10 @@ mod tests {
 
     #[test]
     fn auto_install_without_auto_download_does_nothing() {
-        let mut settings = Settings::default();
-        settings.auto_install = true;
+        let mut settings = Settings {
+            auto_install: true,
+            ..Settings::default()
+        };
         assert!(!settings.effective_auto_install());
         settings.auto_download = true;
         assert!(settings.effective_auto_install());
@@ -240,8 +242,10 @@ mod tests {
 
     #[test]
     fn work_offline_beats_everything_else() {
-        let mut settings = Settings::default();
-        settings.first_run_done = true;
+        let mut settings = Settings {
+            first_run_done: true,
+            ..Settings::default()
+        };
         assert!(settings.may_reach_network());
         settings.work_offline = true;
         assert!(!settings.may_reach_network());

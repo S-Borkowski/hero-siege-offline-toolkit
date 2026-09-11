@@ -5,6 +5,7 @@
 //! hub that has never been online still shows a full library, because the
 //! embedded catalog was generated at build time.
 
+use std::io::Read as _;
 use std::path::Path;
 use std::time::Duration;
 
@@ -277,7 +278,6 @@ pub fn fetch_remote(timeout: Duration) -> Result<(Vec<u8>, String), String> {
     Ok((payload, signature))
 }
 
-use std::io::Read as _;
 
 #[cfg(test)]
 mod tests {
