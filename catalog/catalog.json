@@ -1,0 +1,450 @@
+{
+  "schema": 1,
+  "generated": "2026-09-11T21:53:52Z",
+  "tools": [
+    {
+      "id": "forgepact",
+      "name": "ForgePact",
+      "summary": "Offline gameplay modifiers: density, spawns, drop rates, map reveal.",
+      "repo": "falorfrozen-cmd/ForgePact",
+      "submodule": "ForgePact",
+      "version": "1.3.16",
+      "tag": "v1.3.16",
+      "published": "2026-09-10T06:24:46Z",
+      "license": "AGPL-3.0",
+      "requires": {
+        "admin": false,
+        "game_closed": false,
+        "game_running": false,
+        "windows_only": true
+      },
+      "artifact": {
+        "kind": "zip",
+        "name": "ForgePact-1.3.16.zip",
+        "url": "https://github.com/falorfrozen-cmd/ForgePact/releases/download/v1.3.16/ForgePact-1.3.16.zip",
+        "size": 20975420,
+        "sha256": "e0bbe3a087af20c4a89137db386e06e3421316286bd2a076a4982f02869d1516",
+        "sha256_source": "published+verified",
+        "strip_prefix": "ForgePact-1.3.16/"
+      },
+      "launch": {
+        "exe": "ForgePact.exe",
+        "args": [],
+        "elevate": false,
+        "ports": [
+          8766,
+          8780,
+          8801,
+          8899,
+          9133,
+          9777
+        ],
+        "health": {
+          "url": "http://127.0.0.1:8766/",
+          "timeout_s": 20
+        }
+      },
+      "notes_url": "https://github.com/falorfrozen-cmd/ForgePact/releases/tag/v1.3.16",
+      "notes": "# ForgePact 1.3.16\n\n## Headhunter fixes\n\nHeadhunter could stay inactive even with the plugin correctly installed and its\nkill callbacks firing. On the inspected Steam build, the bundled YYToolkit's\nplayer lookup read an incompatible room layout and failed to find the player.\nForgePact now uses the game's own instance resolver for this lookup and checks\nthat it returned the intended live player. It also accepts the typed instance\nIDs returned by the current runner.\n\n- Failed player lookups or buff calls no longer permanently consume a monster's\n  Headhunter trigger. Successful deliveries still prevent duplicate buffs from\n  multiple death callbacks.\n- A separate monster-death callback provides a fallback when the usual kill or\n  visual death-effect callback is unavailable.\n- Combat activity summaries are logged automatically to help diagnose failures.\n\nThe panel executable is unchanged. The corrected `BloodPactPlugin.dll` is included\nin this package; existing settings are retained.\n\n## Verification\n\n48 automated test methods passed, including 27 native C++ dispatch scenarios.\nThe full release-mode plugin compiled, and the packaged panel passed its\nWebView2/UI/API startup check with an isolated profile. The player lookup and\nidentity checks also passed against the actual game functions executed in an\nisolated memory copy.\n\n**Live combat with this corrected DLL has not yet been verified.** These results\nverify the observed lookup failure and its replacement, not every gameplay path\nor every Hero Siege build.\n\n## How to update\n\n1. Close Hero Siege and the old ForgePact window.\n2. Download and extract `ForgePact-1.3.16.zip`. Keep the whole folder together.\n3. Open `ForgePact.exe` from the new folder, check Game Location, and click\n   **Install Mod Plugin**.\n4. Start Hero Siege again and enable Headhunter as usual.\n\nOpening the new panel alone does not update the installed plugin. The game must\nbe restarted after installation to load the new DLL.",
+      "guide": "docs/submodules/ForgePact/instructions.md",
+      "source_launch": {
+        "cmd": "py",
+        "args": [
+          "-3",
+          "src/forgepact.py"
+        ]
+      }
+    },
+    {
+      "id": "hero-siege-item-editor",
+      "name": "Hero Siege Item Editor",
+      "summary": "Item creator, stash editor and inventory customizer.",
+      "repo": "falorfrozen-cmd/hero-siege-item-editor",
+      "submodule": "hero-siege-item-editor",
+      "version": "2.15.4",
+      "tag": "v2.15.4",
+      "published": "2026-09-07T16:03:29Z",
+      "license": "NOASSERTION",
+      "requires": {
+        "admin": false,
+        "game_closed": true,
+        "game_running": false,
+        "windows_only": true
+      },
+      "artifact": {
+        "kind": "exe",
+        "name": "HeroSiegeItemEditor-v2.15.4-s10.exe",
+        "url": "https://github.com/falorfrozen-cmd/hero-siege-item-editor/releases/download/v2.15.4/HeroSiegeItemEditor-v2.15.4-s10.exe",
+        "size": 43153005,
+        "sha256": "21e37e7431cf375d69e4a4eb836902628afed315f0520439b7125c5a1dba076d",
+        "sha256_source": "published+verified",
+        "strip_prefix": "",
+        "install_as": "HeroSiegeItemEditor.exe"
+      },
+      "launch": {
+        "exe": "HeroSiegeItemEditor.exe",
+        "args": [],
+        "elevate": false,
+        "ports": [
+          8765
+        ],
+        "health": {
+          "url": "http://127.0.0.1:8765/api/instance",
+          "timeout_s": 25
+        }
+      },
+      "notes_url": "https://github.com/falorfrozen-cmd/hero-siege-item-editor/releases/tag/v2.15.4",
+      "notes": "Pairs with ForgePact 1.3.10 or newer.\n\n## What's new\n\n- **No more false \"different Windows user\" warning.** If you installed the ForgePact\n  plugin, started the game once, and only then forged your first item, the Custom\n  Forge screen showed a red warning claiming the game runs under another Windows\n  user. It was reading an old report from that first start. The editor now compares\n  the dates: an old report simply means \"restart Hero Siege\", and that is what it\n  says. The red warning is kept for the real case, when the game started after the\n  forge and still could not find it.\n- If you have not forged anything yet, the screen now says so instead of warning.\n\nEverything else is as in 2.15.3. Download the exe and run it; no install.",
+      "guide": "docs/submodules/hero-siege-item-editor/instructions.md",
+      "source_launch": {
+        "cmd": "py",
+        "args": [
+          "-3",
+          "hs_item_editor_gui.py"
+        ]
+      }
+    },
+    {
+      "id": "hs-offline-tracker",
+      "name": "HS Offline Tracker",
+      "summary": "Loot journal, drop alerts and an always-on-top run overlay.",
+      "repo": "falorfrozen-cmd/HS-Offline-Tracker",
+      "submodule": "HS-Offline-Tracker",
+      "version": "0.1.2",
+      "tag": "v0.1.2",
+      "published": "2026-09-07T07:11:07Z",
+      "license": "MIT",
+      "requires": {
+        "admin": false,
+        "game_closed": false,
+        "game_running": false,
+        "windows_only": true
+      },
+      "artifact": {
+        "kind": "zip",
+        "name": "hs-offline-tracker-0.1.2-portable.zip",
+        "url": "https://github.com/falorfrozen-cmd/HS-Offline-Tracker/releases/download/v0.1.2/hs-offline-tracker-0.1.2-portable.zip",
+        "size": 7205395,
+        "sha256": "1eec96004e861e2454ec2e97d50d610a02f6adc83342e9aee5ea2630cf821465",
+        "sha256_source": "published+verified",
+        "strip_prefix": ""
+      },
+      "launch": {
+        "exe": "hs-offline-tracker.exe",
+        "args": [],
+        "elevate": false,
+        "ports": []
+      },
+      "notes_url": "https://github.com/falorfrozen-cmd/HS-Offline-Tracker/releases/tag/v0.1.2",
+      "notes": "Install the sensor from Settings without ForgePact, and drops that carry their real names.\n\n## What is new\n\n**The tracker can set up the mod loader itself.** Settings > Game link > Install now installs Aurie/YYToolkit when the game does not already carry it, then places the sensor. Before patching it makes a verified clean backup (`Hero_Siege.exe.aurie_backup`), and the patched file must come out as that exact clean file plus one added loader section or the whole thing is rolled back. Previously you had to install ForgePact first; now either one works, and installing both is still fine.\n\n**Drops show the item's real name.** Weapons share their ids across weapon types, and the sensor never sent the weapon type, so every weapon in the timeline read \"Weapon #N\". The sensor now reads the weapon type and the game's own display name and sends both.\n\n**A re-picked alert sound actually plays.** A custom sound was always stored under the same filename, so the window kept playing the first file you picked even after switching or going back to Default. The file's identity is now part of its address, so a new pick is heard immediately.\n\n**Listed weapons make a card again.** Lists match by name; weapons had no name on the wire, so nothing matched. Known items now use the name table's spelling, unknown ones keep whatever the game sent.\n\n**Also:** a \"Pick Hero_Siege.exe...\" button for a game the tracker has never seen; the install refuses to run while the game is open; and EasyAntiCheat files are reported rather than treated as a blocker, since offline copies ship stubbed ones.\n\n## Install\n\nRun the setup, open Settings > Game link, press Install, then start Hero Siege. If the game folder has no mod loader the tracker installs one for you. The portable zip is the same program without an installer; keep the `producer` and `aurie-loader` folders next to the exe.\n\n## Notes\n\nMagic find is still not shown: the game's stat routine cannot be observed on this build without destabilising it. The sensor only reads; it never writes to the game.\n\n## Files\n\n| File | What it is |\n| --- | --- |\n| `HS Offline Tracker_0.1.2_x64-setup.exe` | Installer, carries the sensor and the loader |\n| `hs-offline-tracker-0.1.2-portable.zip` | Portable build, no installer |\n| `SHA256SUMS-0.1.2.txt` | Checksums for the two files above |",
+      "guide": "docs/submodules/HS-Offline-Tracker/instructions.md",
+      "source_launch": {
+        "cmd": "npm",
+        "args": [
+          "start"
+        ]
+      }
+    },
+    {
+      "id": "hs-offline-launcher",
+      "name": "HS Offline Launcher",
+      "summary": "Finds your Steam install and starts Hero Siege offline, EAC disabled.",
+      "repo": "falorfrozen-cmd/HS-Offline-Launcher",
+      "submodule": "HS-Offline-Launcher",
+      "version": "1.0.1",
+      "tag": "v1.0.1",
+      "published": "2026-09-02T06:42:33Z",
+      "license": "MIT",
+      "requires": {
+        "admin": false,
+        "game_closed": true,
+        "game_running": false,
+        "windows_only": true
+      },
+      "artifact": {
+        "kind": "exe",
+        "name": "HS-Offline-Launcher.exe",
+        "url": "https://github.com/falorfrozen-cmd/HS-Offline-Launcher/releases/download/v1.0.1/HS-Offline-Launcher.exe",
+        "size": 14176796,
+        "sha256": "31eea4a7d7175d70caf86a438a952c6b7066aeb387da5e4e830ae80ae78ade31",
+        "sha256_source": "published+verified",
+        "strip_prefix": "",
+        "install_as": "HS-Offline-Launcher.exe"
+      },
+      "launch": {
+        "exe": "HS-Offline-Launcher.exe",
+        "args": [],
+        "elevate": false,
+        "ports": [
+          8861,
+          8862,
+          8863,
+          8961
+        ],
+        "health": {
+          "url": "http://127.0.0.1:8861/",
+          "timeout_s": 20,
+          "any_status": true
+        }
+      },
+      "notes_url": "https://github.com/falorfrozen-cmd/HS-Offline-Launcher/releases/tag/v1.0.1",
+      "notes": "Fixes EAC service status detection on localized Windows installations.\n\n- Unknown and transitioning EAC states are no longer incorrectly shown as ACTIVE.\n- Verified with 30 automated tests and a packaged-app smoke test.\n\nSHA-256: `31eea4a7d7175d70caf86a438a952c6b7066aeb387da5e4e830ae80ae78ade31`",
+      "guide": "docs/submodules/HS-Offline-Launcher/instructions.md",
+      "source_launch": {
+        "cmd": "py",
+        "args": [
+          "-3",
+          "src/hs_offline_launcher.py"
+        ]
+      }
+    },
+    {
+      "id": "hscraftsim",
+      "name": "HSCraftSim",
+      "summary": "Cube crafting simulator with the full recipe database.",
+      "repo": "falorfrozen-cmd/HSCraftSim",
+      "submodule": "HSCraftSim",
+      "version": "1.0.2",
+      "tag": "v1.0.2",
+      "published": "2026-09-08T18:39:14Z",
+      "license": "NOASSERTION",
+      "requires": {
+        "admin": false,
+        "game_closed": false,
+        "game_running": false,
+        "windows_only": true
+      },
+      "artifact": {
+        "kind": "zip",
+        "name": "HSCraftSim-1.0.2-Windows-x64.zip",
+        "url": "https://github.com/falorfrozen-cmd/HSCraftSim/releases/download/v1.0.2/HSCraftSim-1.0.2-Windows-x64.zip",
+        "size": 31144563,
+        "sha256": "c1279a2f5aac791a6de391421f99443c41ac252a7e8619528b4e6bb94a9165a2",
+        "sha256_source": "published+verified",
+        "strip_prefix": "HSCraftSim-1.0.2-Windows-x64/"
+      },
+      "launch": {
+        "exe": "HSCraftSim.exe",
+        "args": [],
+        "elevate": false,
+        "ports": [
+          17870,
+          17871,
+          17872,
+          17873,
+          17874,
+          17875,
+          17876,
+          17877,
+          17878,
+          17879
+        ],
+        "health": {
+          "url": "http://127.0.0.1:17870/_health",
+          "timeout_s": 25
+        }
+      },
+      "notes_url": "https://github.com/falorfrozen-cmd/HSCraftSim/releases/tag/v1.0.2",
+      "notes": "HSCraftSim 1.0.2 adds creator credits and community links, following the Recipes fix in 1.0.1.\r\n\r\n## Credits and community\r\n\r\n- **Created by Falor** is visible below the logo on desktop and mobile.\r\n- **About / Credits** identifies **Falor** as creator and **Graxy_TV** as host, with separate game credits.\r\n- [Falor's Discord](https://discord.gg/3wWfYubgb3) — bug reports and feedback.\r\n- [Graxy_TV's Discord](https://discord.gg/fDtXAQu5c3) — community.\r\n- Both communities are also linked directly in the footer. Discord opens externally and leaves the Cube session in the simulator.\r\n\r\n## Download\r\n\r\nDownload **HSCraftSim-1.0.2-Windows-x64.zip**, extract it, then open **HSCraftSim.exe**. The standalone EXE is also available below. Replacing the app preserves your existing simulator session.\r\n\r\nWindows 10/11 x64 and Microsoft Edge WebView2 Runtime are required. Python, Node.js and a Hero Siege installation are not required. The same interface is included in the static website build.\r\n\r\n## Verification\r\n\r\nGeneral regression and static package checks passed, together with 25 craft-workspace browser checks and About/footer checks at five viewport sizes. The packaged EXE passed two isolated WebView2 launches, About opening/closing, credit and Discord-target checks, focus restoration, and cross-launch session persistence.\r\n\r\nNo crafting rules changed. This remains an unofficial player test build with the documented game-data limitations.\n\n## Source distribution update — 2026-09-09\n\nThe existing Windows EXE, Windows ZIP and their original checksum files are unchanged. The GitHub-generated source archives now exclude game-derived media, bundled fonts, bulk data and captured research/test outputs. A fresh source checkout requires compatible inputs supplied locally; see [LOCAL-DATA.md](https://github.com/falorfrozen-cmd/HSCraftSim/blob/main/LOCAL-DATA.md).\n\nThe [maintained source-only ZIP](https://github.com/falorfrozen-cmd/HSCraftSim/releases/download/v1.0.2/HSCraftSim-1.0.2-Source.zip) includes setup helpers. The [research scripts ZIP](https://github.com/falorfrozen-cmd/HSCraftSim/releases/download/v1.0.2/HSCraftSim-Research-Scripts-2026-09-09.zip) contains analysis scripts and instructions, without decompiled outputs or extracted game files. Checksums are attached separately to v1.0.2.\n\nSource cleanup does not establish permission for embedded third-party content in existing binaries or certify the remaining implementation as legally cleared. See [distribution scope](https://github.com/falorfrozen-cmd/HSCraftSim/blob/main/DISTRIBUTION.md). Existing contributors should follow the [fresh-clone instructions](https://github.com/falorfrozen-cmd/HSCraftSim/blob/main/docs/AFTER-SOURCE-CLEANUP.md) because the historical commit/tag IDs changed.",
+      "guide": "docs/submodules/HSCraftSim/instructions.md",
+      "source_launch": {
+        "cmd": "py",
+        "args": [
+          "-3",
+          "server.py",
+          "--no-browser"
+        ]
+      }
+    },
+    {
+      "id": "hssaveeditor",
+      "name": "HS Save Editor",
+      "summary": "Character save editor for offline saves, with automatic backups.",
+      "repo": "falorfrozen-cmd/HSSaveEditor",
+      "submodule": "HSSaveEditor",
+      "version": "1.4.1",
+      "tag": "v1.4.1",
+      "published": "2026-09-07T06:19:40Z",
+      "license": "NOASSERTION",
+      "requires": {
+        "admin": false,
+        "game_closed": true,
+        "game_running": false,
+        "windows_only": true
+      },
+      "artifact": {
+        "kind": "zip",
+        "name": "HSSaveEditor-Windows-v1.4.1.zip",
+        "url": "https://github.com/falorfrozen-cmd/HSSaveEditor/releases/download/v1.4.1/HSSaveEditor-Windows-v1.4.1.zip",
+        "size": 12010907,
+        "sha256": "2bd07a49c21db48c17caf3054c6fa7338abe83daa85dc7bd118a8f297fc60816",
+        "sha256_source": "published+verified",
+        "strip_prefix": ""
+      },
+      "launch": {
+        "exe": "HeroSiegeSaveEditor.exe",
+        "args": [],
+        "elevate": false,
+        "ports": []
+      },
+      "notes_url": "https://github.com/falorfrozen-cmd/HSSaveEditor/releases/tag/v1.4.1",
+      "notes": "# Hero Siege Save Editor v1.4.1\n\n## What changed\n\n- Fixed: the editor refused to open the Ether state with \"Ether quest progress produced a fractional point total\" when an Ether quest chain sat at an odd stage (for example a Wormhole chain at 7 after an Inferno challenge run). The game floors each chain's stage before awarding points, so a half-finished quest simply pays nothing yet; the editor now does the same instead of stopping.\n- No other behaviour changed. Ether totals, presets and staged saves work as in 1.4.0.\n\n## Tested\n\n- All 90 automated tests pass, including a new one for odd quest stages.\n- The point formula was checked against the game's own StatEtherPoints routine.\n\nThis tool is for offline/single-player characters only. Close Hero Siege before editing and keep the automatic backup.",
+      "guide": "docs/submodules/HSSaveEditor/instructions.md",
+      "source_launch": {
+        "cmd": "py",
+        "args": [
+          "-3",
+          "hs_save_editor.py"
+        ]
+      }
+    },
+    {
+      "id": "hssaveeditor-steamdeck",
+      "name": "HS Steam Deck Save Editor",
+      "summary": "Browser-based save editor for Steam Deck and handheld players.",
+      "repo": "falorfrozen-cmd/HSSaveEditor-SteamDeck-",
+      "submodule": "HSSaveEditor-SteamDeck-",
+      "version": "1.0.0",
+      "tag": "v1.0.0",
+      "published": "2026-05-04T14:02:33Z",
+      "license": "NOASSERTION",
+      "requires": {
+        "admin": false,
+        "game_closed": true,
+        "game_running": false,
+        "windows_only": false
+      },
+      "artifact": {
+        "kind": "html",
+        "name": "HSSaveEditor-SteamDeck-Web-v1.0.0.zip",
+        "url": "https://github.com/falorfrozen-cmd/HSSaveEditor-SteamDeck-/releases/download/v1.0.0/HSSaveEditor-SteamDeck-Web-v1.0.0.zip",
+        "size": 11010,
+        "sha256": "17f31075d8c7b7bed5e63220c2d13cf47e2b7a129e27a259d4531f26c8a00d7f",
+        "sha256_source": "computed",
+        "strip_prefix": "HSSaveEditor-SteamDeck-Web-v1.0.0/"
+      },
+      "launch": {
+        "exe": "HSSaveEditor.html",
+        "args": [],
+        "elevate": false,
+        "ports": []
+      },
+      "notes_url": "https://github.com/falorfrozen-cmd/HSSaveEditor-SteamDeck-/releases/tag/v1.0.0",
+      "notes": "## HSSaveEditor Steam Deck Web v1.0.0\n\nFirst stable Steam Deck / offline web release of HSSaveEditor.\n\nThis version was built for Steam Deck users who cannot conveniently use the Windows desktop editor. It runs fully offline in the browser and can edit Hero Siege `.hss` character save files without installing anything.\n\n### Download\n\n- **HSSaveEditor-SteamDeck-Web-v1.0.0.zip**  \n  Offline web editor for Steam Deck and Chromium-based browsers.\n\n### Highlights\n\n- Added Steam Deck friendly offline web editor.\n- Added browser-based `.hss` character save editing.\n- Added direct save support for compatible Chromium-based browsers.\n- Edited files now keep the original filename instead of downloading as an edited copy.\n- Hid Gold and Professions fields in the web build because those values are backed by `shop.ini`, which Steam Deck browser file pickers usually cannot access reliably.\n- Added character editing tools such as waypoint unlock and Inferno unlock.\n- Added raw decoded text view.\n- Added read-only inventory inspector.\n\n### How to use\n\n1. Close Hero Siege.\n2. Extract the zip file.\n3. Open `index.html` in a Chromium-based browser.\n4. Select your `.hss` character save file.\n5. Edit the values you want.\n6. Use `Save Directly...` if supported, or `Download Edited .hss` and replace the original file manually.\n\n### Notes\n\n- Intended for offline/single-player saves only.\n- Do not use with online characters, multiplayer, leaderboards, trading, or anti-cheat protected modes.\n- Keep a backup of your original save before editing.",
+      "guide": "docs/submodules/HSSaveEditor-SteamDeck-/instructions.md"
+    },
+    {
+      "id": "hs-value-editor",
+      "name": "HS Value Scanner",
+      "summary": "Memory value scanner and offline runtime value editor.",
+      "repo": "falorfrozen-cmd/HS-ValueEditor",
+      "submodule": "HS-ValueEditor",
+      "version": "1.0.2",
+      "tag": "v1.0.2",
+      "published": "2026-05-04T19:37:48Z",
+      "license": "NOASSERTION",
+      "requires": {
+        "admin": true,
+        "game_closed": false,
+        "game_running": true,
+        "windows_only": true
+      },
+      "artifact": {
+        "kind": "zip",
+        "name": "HSValueScanner-Windows-v1.0.1.zip",
+        "url": "https://github.com/falorfrozen-cmd/HS-ValueEditor/releases/download/v1.0.2/HSValueScanner-Windows-v1.0.1.zip",
+        "size": 16689049,
+        "sha256": "be4226126d87faabbf1ac3db02aa49fca5380caeb1accc32a0ae519527e99d15",
+        "sha256_source": "computed",
+        "strip_prefix": ""
+      },
+      "launch": {
+        "exe": "HSValueScanner.exe",
+        "args": [],
+        "elevate": true,
+        "ports": []
+      },
+      "notes_url": "https://github.com/falorfrozen-cmd/HS-ValueEditor/releases/tag/v1.0.2",
+      "notes": "## HS Value Scanner v1.0.2 Hotfix\n\n- Fixed favorites persistence. `hs_favorites.json` is now created and saved next to `HSValueScanner.exe`.\n- Favorites are now saved automatically.\n- Removed preset controls to simplify the workflow.\n- Existing old preset-based favorite files are migrated automatically.",
+      "guide": "docs/submodules/HS-ValueEditor/instructions.md"
+    },
+    {
+      "id": "hs-offline-loot-forge",
+      "name": "HS Offline Loot Forge",
+      "summary": "Runtime loot-table adjustments and a targeted farming assistant.",
+      "repo": "falorfrozen-cmd/Hs-Offline-Loot-Forge",
+      "submodule": "Hs-Offline-Loot-Forge",
+      "version": "2.7.9",
+      "tag": "v2.7.9",
+      "published": "2026-08-29T07:01:04Z",
+      "license": "NOASSERTION",
+      "requires": {
+        "admin": true,
+        "game_closed": false,
+        "game_running": true,
+        "windows_only": true
+      },
+      "artifact": {
+        "kind": "zip",
+        "name": "HSOfflineLootForge-v2.7.9.zip",
+        "url": "https://github.com/falorfrozen-cmd/Hs-Offline-Loot-Forge/releases/download/v2.7.9/HSOfflineLootForge-v2.7.9.zip",
+        "size": 49644090,
+        "sha256": "1911a8247563ec7f547dce55d8c364ede8fd10464019fd379e1b80a01eae6ff3",
+        "sha256_source": "computed",
+        "strip_prefix": ""
+      },
+      "launch": {
+        "exe": "HSOfflineLootForge.exe",
+        "args": [],
+        "elevate": true,
+        "ports": []
+      },
+      "notes_url": "https://github.com/falorfrozen-cmd/Hs-Offline-Loot-Forge/releases/tag/v2.7.9",
+      "notes": "Updated for Hero Siege 7.0.5.0.\n\nFixed route compatibility checks, including Angelic / SS Drops.",
+      "guide": "docs/submodules/Hs-Offline-Loot-Forge/instructions.md"
+    },
+    {
+      "id": "hs-stat-forge",
+      "name": "HS Offline Stat Forge",
+      "summary": "Runtime character stat tuner and monster density modifier.",
+      "repo": "falorfrozen-cmd/hs-stat-forge",
+      "submodule": "hs-stat-forge",
+      "version": "2.5.0",
+      "tag": "v2.5.0",
+      "published": "2026-09-05T08:40:29Z",
+      "license": "NOASSERTION",
+      "requires": {
+        "admin": true,
+        "game_closed": false,
+        "game_running": true,
+        "windows_only": true
+      },
+      "artifact": {
+        "kind": "zip",
+        "name": "HS-Offline-Stat-Forge-v2.5.0.zip",
+        "url": "https://github.com/falorfrozen-cmd/hs-stat-forge/releases/download/v2.5.0/HS-Offline-Stat-Forge-v2.5.0.zip",
+        "size": 13201135,
+        "sha256": "91e1db25bf2102b746d329566317ebfc338f72efdfb2c58e269a83a2ac8ad3fa",
+        "sha256_source": "computed",
+        "strip_prefix": "HS-Offline-Stat-Forge-v2.5.0/"
+      },
+      "launch": {
+        "exe": "HSStatForge.exe",
+        "args": [],
+        "elevate": true,
+        "ports": []
+      },
+      "notes_url": "https://github.com/falorfrozen-cmd/hs-stat-forge/releases/tag/v2.5.0",
+      "notes": "This release makes **All Skills additive** instead of absolute.\n\n\n- Gear \"+X All Skills\", elemental skill flats and buffs now keep stacking on\n  top: one point in every skill plus `+19` shows 20, and a `+2 All Skills`\n  item takes it to 22. The previous version replaced the whole function with a\n  constant, which is why item bonuses never counted.\n-\n\nOffline/single-player only. Start Hero Siege without EAC.",
+      "guide": "docs/submodules/hs-stat-forge/instructions.md",
+      "source_launch": {
+        "cmd": "py",
+        "args": [
+          "-3",
+          "hs_statforge.py"
+        ]
+      }
+    }
+  ],
+  "warnings": []
+}
