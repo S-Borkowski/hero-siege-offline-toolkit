@@ -62,8 +62,10 @@
     // An install that fails does so on a worker thread, long after the click
     // returned, so nothing else in the interface would mention it.
     if (failed) return { text: 'Install failed', tone: 'failed' };
-    if (tool.running_pid) return { text: 'Running', tone: 'running' };
+    // Both can be true now: a tool found by its install path has a PID the hub
+    // can stop but did not start. Say the more informative of the two.
     if (tool.running_elsewhere) return { text: 'Running (outside the hub)', tone: 'running' };
+    if (tool.running_pid) return { text: 'Running', tone: 'running' };
     if (tool.staged) return { text: `Staged — ${tool.version}`, tone: 'staged' };
     // `update_available` was computed from the version on disk before this
     // install; suppress it until the backend catches up, or the card offers to
@@ -84,7 +86,14 @@
       };
     }
     if (tool.running_pid && tool.can_stop) {
-      return { label: 'Stop', icon: 'stop', command: 'stop_tool' };
+      return {
+        label: 'Stop',
+        icon: 'stop',
+        command: 'stop_tool',
+        why: tool.running_elsewhere
+          ? 'Not started by the hub, but running from the copy the hub installed, so the hub can still stop it.'
+          : '',
+      };
     }
     // Running, but elevated under an unelevated hub. Windows refuses the
     // terminate every time, so Stop would be a button that cannot work.
@@ -96,14 +105,15 @@
         why: 'Started with Administrator rights, which the hub does not have. Close it from its own window.',
       };
     }
-    // Up, but not started by us, so there is no PID to stop. Offering Launch
-    // here just hits the tool's own single-instance lock.
+    // Up, but with no PID the hub can act on -- only its health endpoint
+    // answered, so the running copy is not the one the hub installed. Offering
+    // Launch here just hits the tool's own single-instance lock.
     if (tool.running_elsewhere) {
       return {
         label: 'Running',
         icon: 'play',
         command: null,
-        why: 'This was started outside the hub, so the hub cannot stop it. Close its own window.',
+        why: 'Something is already answering on the port this tool uses, and it is not the copy the hub installed. Close it from its own window.',
       };
     }
     if (tool.update_available && !justInstalled) {

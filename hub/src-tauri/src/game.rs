@@ -20,16 +20,24 @@ pub struct GameStatus {
     pub eac_running: bool,
 }
 
-pub fn status() -> GameStatus {
-    let mut system = sysinfo::System::new();
-    system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
-    read_status(system.processes().values().map(|process| {
+/// Read the game's state from a snapshot the caller already has.
+///
+/// `build_view` needs this alongside two other answers from the same process
+/// table, so it takes the snapshot once and passes it in rather than having each
+/// question enumerate for itself.
+pub fn status_from(snapshot: &crate::procs::Snapshot) -> GameStatus {
+    read_status(snapshot.iter().map(|proc| {
         (
-            process.name().to_string_lossy().to_string(),
-            process.pid().as_u32(),
-            process.exe().map(|p| p.to_string_lossy().to_string()),
+            proc.name.clone(),
+            proc.pid,
+            proc.exe.as_ref().map(|p| p.to_string_lossy().to_string()),
         )
     }))
+}
+
+/// For callers with no snapshot of their own -- the `game_status` command.
+pub fn status() -> GameStatus {
+    status_from(&crate::procs::Snapshot::take())
 }
 
 /// The decision, separated from the process enumeration so it can be tested.

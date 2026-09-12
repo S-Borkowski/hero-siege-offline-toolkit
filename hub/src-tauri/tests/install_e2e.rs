@@ -368,7 +368,7 @@ fn an_update_keeps_the_previous_version_and_can_be_rolled_back() {
 #[test]
 fn a_blocked_update_waits_with_its_reason_and_then_applies() {
     use hero_siege_toolkit_hub_lib::game::{self, GameStatus};
-    use hero_siege_toolkit_hub_lib::state::{HubState, Installed, Staged};
+    use hero_siege_toolkit_hub_lib::state::{HubState, Staged};
 
     let v1 = zip_bytes(&[("ForgePact-1.3.16/ForgePact.exe", b"MZ v1")]);
     let server1 = Server::start(v1.clone());
