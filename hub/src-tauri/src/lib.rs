@@ -37,6 +37,8 @@ pub struct Hub {
     /// The checkout this hub was built in, if it can still be found. Developer
     /// mode runs tools out of the submodules under it.
     pub repo_root: Option<PathBuf>,
+    /// Read once at startup: a process's own elevation does not change.
+    pub elevated: bool,
     pub log: log::Log,
 }
 
@@ -78,6 +80,9 @@ pub struct HubInfo {
     pub log_path: String,
     pub repo_root: Option<String>,
     pub catalog_url: String,
+    /// Normally false, and deliberately so -- the hub elevates tools per launch
+    /// rather than running elevated itself.
+    pub elevated: bool,
 }
 
 /// One row of the Library grid, with everything the card needs already decided.
@@ -96,6 +101,9 @@ pub struct ToolView {
     pub can_roll_back: bool,
     pub update_available: bool,
     pub running_pid: Option<u32>,
+    /// False for an elevated tool under an unelevated hub: Windows refuses the
+    /// terminate, so the card must not offer Stop.
+    pub can_stop: bool,
     /// A copy started outside the hub, noticed by its port being taken.
     pub running_elsewhere: bool,
     pub staged: Option<state::Staged>,
@@ -152,6 +160,7 @@ fn build_view(hub: &Hub) -> Result<LibraryView, String> {
                 .map(|i| version::is_newer(&tool.version, &i.version))
                 .unwrap_or(false),
             running_pid: pid,
+            can_stop: pid.is_some() && launch::can_stop(tool.launch.elevate, hub.elevated),
             running_elsewhere: pid.is_none() && launch::already_running(tool),
             staged: hub_state.staged.get(&tool.id).cloned(),
             source_available,
@@ -191,6 +200,7 @@ fn hub_info(hub: State<'_, Arc<Hub>>) -> HubInfo {
         log_path: hub.log.path().to_string_lossy().to_string(),
         repo_root: hub.repo_root.as_ref().map(|p| p.to_string_lossy().to_string()),
         catalog_url: catalog::CATALOG_URL.to_string(),
+        elevated: hub.elevated,
     }
 }
 
@@ -679,12 +689,21 @@ pub fn run() {
         &layout.cached_catalog_signature(),
     );
     let logger = log::Log::new(layout.log_file());
+    let elevated = launch::hub_is_elevated();
     logger.info(format!(
-        "hub {} starting; catalog {:?} generated {}",
+        "hub {} starting; catalog {:?} generated {}; elevated {}",
         env!("CARGO_PKG_VERSION"),
         loaded.source,
-        loaded.catalog.generated
+        loaded.catalog.generated,
+        elevated
     ));
+    if elevated {
+        // Not fatal, but worth a line: every tool started from here inherits
+        // Administrator, which is exactly what elevating per launch avoids.
+        logger.info(
+            "this hub is running elevated, so every tool it starts will be too",
+        );
+    }
 
     let repo_root = std::env::current_dir()
         .ok()
@@ -702,6 +721,7 @@ pub fn run() {
         catalog: Mutex::new(loaded),
         running: Mutex::new(BTreeMap::new()),
         repo_root,
+        elevated,
         log: logger,
     });
 
