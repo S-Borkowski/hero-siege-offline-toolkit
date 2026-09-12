@@ -162,6 +162,34 @@ hook to compare against, and that comparison is what proved the problem.
 The general rule: **put the interception in the installer, not in whichever
 call sites a review happened to verify.** Fixing the five named functions
 would have left every other gameplay hook, and every future one, blind.
+
+## Check a Permission Where It Is Used, Not Where It Is Convenient
+
+`EVENT_FRAME` (what `FrameCallback`/`OnFrame` run on) is dispatched from
+`HkPresent` — the **end** of a frame. Object step events run **before** it. So
+a flag that a step-time consumer reads cannot be validated at `EVENT_FRAME`:
+whatever the consumer did this frame, it already did.
+
+Map reveal's pack pass learned this the expensive way. Its "lie about
+distance" permission was invalidated in `OnFrame` when the zone changed, which
+looked correct and passed its tests, but the creators consuming that
+permission ran earlier in the same frame — so the first call in a new zone
+still got the previous zone's answer, which is exactly the call that leaves a
+spawner inert. Two rounds of adding more identity tracking at `OnFrame` could
+not have fixed it; only moving the check to the consumer did.
+
+- **Validate at the point of use**, with the thing being acted on. The
+  question "may I do this to *this* object" is usually answerable from the
+  object itself (here: does this creator report a real `enemyCreatorTimer`),
+  and that answer is correct regardless of when any cached state was last
+  refreshed.
+- **A sentinel that means "unknown" must never compare equal to a real
+  value.** The same code stored `INT64_MIN` for an unreadable room and then
+  compared against it, so "unreadable" silently matched "unreadable" and the
+  guard passed. Prefer a read that fails as a unit over a magic value.
+- **Frame-boundary work is for budgets and housekeeping** — counting a window
+  down, throttling expensive polls — not for anything another system's
+  correctness depends on within the same frame.
 - **Write the negative down as "not observed", not "does not happen"**, until
   a control backs it. Research docs in this repo are read later as settled
   fact; a mislabeled negative costs more sessions than the one that produced
