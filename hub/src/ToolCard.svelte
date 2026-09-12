@@ -174,8 +174,6 @@
     <p class="counted">{bytes(progress.received)} of {bytes(progress.total)}</p>
   {:else if progress?.phase === 'verifying'}
     <p class="counted verifying">Checking SHA-256…</p>
-  {:else if failed}
-    <p class="counted broke">{failed.error}</p>
   {/if}
 
   <footer>
@@ -306,7 +304,6 @@
   }
   .counted { margin: 0 0 4px; font-size: 10.5px; color: var(--bone-4); }
   .counted.verifying { margin-top: 10px; color: var(--arcane); }
-  .counted.broke { margin-top: 10px; color: var(--rar-satanic); line-height: 1.45; }
 
   footer { display: flex; gap: 6px; align-items: stretch; margin-top: 10px; }
   .primary {
