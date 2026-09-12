@@ -264,6 +264,43 @@ otherwise, and the hub's updater endpoint is
 "latest" would quietly stop the hub being able to update itself until the next
 hub release displaced it.
 
+### Which repository a build trusts
+
+Four things have to agree: the catalog URL, its signature URL, the updater
+endpoint, and the documentation links. They are all derived from one value,
+`HUB_REPO` in [`hub/src-tauri/src/catalog.rs`](../../hub/src-tauri/src/catalog.rs),
+read through `option_env!` with the canonical repository as its default.
+
+They did not always agree. The four were separate literals pointing at a fork
+while the release-notification template told tool repositories to notify the
+canonical repository -- so a new tool release would have rebuilt one catalog
+while every installed hub read another. Merged upstream, it would have been
+worse than a broken link: every upstream user's hub would have fetched its
+catalog *and its own updates* from a personal fork's release assets.
+
+`hub-release.yml` sets `HUB_REPO` and rewrites the updater endpoint from
+`github.repository`, so whichever repository publishes a hub builds one that
+points back at itself. A fork's release checks the fork; the canonical release
+checks the canonical repository; neither needs a source edit. The endpoint is
+patched rather than templated because `tauri.conf.json` cannot read an
+environment variable.
+
+`build.rs` emits `cargo:rerun-if-env-changed=HUB_REPO`. Cargo does not track
+`option_env!` as an input by itself, and CI caches the build directory -- without
+that line a cached artifact compiled against the previous value could be handed
+back, and a fork's release would ship a hub pointing at whoever built last.
+
+To build a hub for a fork locally:
+
+```bash
+cd hub
+HUB_REPO=owner/hero-siege-offline-toolkit npm run release
+```
+
+A plain local build points at the canonical repository, which is correct for
+anything published and means "Check for updates" fails until that repository has
+a `catalog` release.
+
 ### Repository secrets
 
 | Secret | Used by | What happens without it |

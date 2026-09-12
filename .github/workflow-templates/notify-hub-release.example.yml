@@ -14,6 +14,13 @@
 # both, or neither. If you already have `notify-hub.yml`, add the job below to
 # it rather than keeping two workflows.
 #
+# The repository this notifies must be the one the installed hubs read their
+# catalog from -- `HUB_REPO` in `hub/src-tauri/src/catalog.rs`, which a release
+# build overrides to whichever repository published it. Notifying one repository
+# while players' hubs read another means a release rebuilds a catalog nobody
+# fetches. The URL below is the canonical repository; change it if you are
+# running your own.
+#
 # Setup, once per tool repository:
 #
 #   1. Create a fine-grained personal access token with

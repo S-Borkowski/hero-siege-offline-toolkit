@@ -12,6 +12,12 @@ import { listen as tauriListen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import fallbackCatalog from '../../catalog/catalog.json';
 
+// Only for the browser preview. The desktop build gets this from Rust's
+// HUB_REPO, which a release build overrides to whichever repository published
+// it; the preview has no build-time value to read, so it assumes the canonical
+// one and says so.
+const PREVIEW_REPO = 'falorfrozen-cmd/hero-siege-offline-toolkit';
+
 export const native = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
 const DEFAULT_SETTINGS = {
@@ -42,6 +48,7 @@ function browserLibrary() {
       running_elsewhere: false,
       staged: null,
       source_available: false,
+      guide_url: tool.guide ? `https://github.com/${PREVIEW_REPO}/blob/main/${tool.guide}` : null,
     })),
     catalog_generated: fallbackCatalog.generated,
     catalog_source: 'embedded',
@@ -49,6 +56,7 @@ function browserLibrary() {
     last_check: null,
     settings: browserSettings,
     game: { running: false, pid: null, exe_path: null, eac_running: false },
+    hub_repo: PREVIEW_REPO,
   };
 }
 
@@ -59,6 +67,8 @@ const browserAnswers = {
     log_path: '(none)',
     repo_root: null,
     catalog_url: '(not fetched in the browser)',
+    hub_repo: PREVIEW_REPO,
+    elevated: false,
   }),
   library: browserLibrary,
   get_settings: () => browserSettings,

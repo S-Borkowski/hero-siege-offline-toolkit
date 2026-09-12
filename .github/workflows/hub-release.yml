@@ -64,6 +64,33 @@ jobs:
         with:
           workspaces: hub/src-tauri
 
+      # Whichever repository is publishing this hub is the one it should trust.
+      #
+      # Four things need to agree: the catalog URL, its signature URL, the
+      # updater endpoint and the documentation links. They are all derived from
+      # one value -- `HUB_REPO` in Rust, and the updater endpoint here, because
+      # tauri.conf.json cannot read an environment variable. Setting both from
+      # `github.repository` means a fork's release checks the fork and the
+      # canonical release checks the canonical repository, with no source edit
+      # and no way for the two halves to disagree.
+      - name: Point this build at the repository publishing it
+        shell: bash
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          echo "HUB_REPO=$REPO" >> "$GITHUB_ENV"
+          node -e '
+            const fs = require("fs");
+            const path = "hub/src-tauri/tauri.conf.json";
+            const conf = JSON.parse(fs.readFileSync(path, "utf8"));
+            const endpoint =
+              "https://github.com/" + process.env.REPO +
+              "/releases/latest/download/latest.json";
+            conf.plugins.updater.endpoints = [endpoint];
+            fs.writeFileSync(path, JSON.stringify(conf, null, 2));
+            console.log("updater endpoint ->", endpoint);
+          '
+
       - name: Install frontend dependencies
         working-directory: hub
         run: npm ci

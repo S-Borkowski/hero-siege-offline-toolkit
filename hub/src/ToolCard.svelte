@@ -214,8 +214,11 @@
         <button class="scrim" type="button" aria-label="Close menu" onclick={() => (menuOpen = false)}></button>
         <ul class="menu skin skin-panel" style="--skin-src:url({art('panel')})">
           <li><button type="button" onclick={() => overflow('open_url', { url: tool.notes_url })}>Release notes</button></li>
-          {#if tool.guide}
-            <li><button type="button" onclick={() => overflow('open_url', { url: `https://github.com/S-Borkowski/hero-siege-offline-toolkit/blob/main/${tool.guide}` })}>Developer guide</button></li>
+          <!-- The backend builds this from HUB_REPO. Composing it here meant
+               the interface held an opinion about which repository the hub came
+               from, and held a stale one. -->
+          {#if tool.guide_url}
+            <li><button type="button" onclick={() => overflow('open_url', { url: tool.guide_url })}>Developer guide</button></li>
           {/if}
           {#if tool.install_path}
             <li><button type="button" onclick={() => overflow('open_path', { path: tool.install_path })}>Open folder</button></li>
