@@ -1,0 +1,150 @@
+# Regenerate catalog.json when a tool publishes a release.
+name: Catalog
+
+on:
+  # Fired by a tool repository's own release workflow. See
+  # .github/workflow-templates/notify-hub.example.yml for the sending half.
+  repository_dispatch:
+    types: [release-published]
+  # A tool can be released without the notification firing -- a workflow that
+  # was never installed, a token that expired, a release published by hand. The
+  # schedule is what stops that turning into a catalog that is quietly months
+  # old.
+  schedule:
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+    inputs:
+      only:
+        description: 'Space-separated tool ids to rebuild (default: all)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: catalog
+  cancel-in-progress: false
+
+jobs:
+  regenerate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # The payload of a repository_dispatch is attacker-influenced in exactly
+      # the same way submodule-dispatch.yml treats it: whoever can fire the
+      # event chooses these strings. Nothing here interpolates them into a
+      # shell; the allowlist is so an unexpected sender shows up in the log
+      # rather than silently causing a rebuild.
+      - name: Check the sender against the allowlist
+        if: github.event_name == 'repository_dispatch'
+        env:
+          SENDER: ${{ github.event.client_payload.repository }}
+        run: |
+          allowed="ForgePact HSCraftSim HSSaveEditor HSSaveEditor-SteamDeck- \
+                   HS-Offline-Launcher HS-Offline-Tracker HS-ValueEditor \
+                   Hs-Offline-Loot-Forge hero-siege-item-editor hs-stat-forge"
+          name="${SENDER##*/}"
+          for candidate in $allowed; do
+            if [ "$candidate" = "$name" ]; then
+              echo "release notification from $name"
+              exit 0
+            fi
+          done
+          echo "::error::unrecognised sender '$SENDER'; not rebuilding"
+          exit 1
+
+      # The generator downloads every artifact to hash it. GITHUB_TOKEN raises
+      # the API limit well past the ~30 requests a full build spends.
+      - name: Rebuild the catalog
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Through the environment rather than `${{ }}` inside the script: an
+          # expression is substituted before the shell ever sees it, so an input
+          # containing a backtick or `$(...)` would run as part of this step.
+          ONLY: ${{ github.event.inputs.only }}
+        run: |
+          if [ -n "$ONLY" ]; then
+            python tools/build_catalog.py --only $ONLY
+          else
+            python tools/build_catalog.py
+          fi
+
+      - name: Sign it
+        env:
+          HUB_MINISIGN_SECRET_KEY: ${{ secrets.HUB_MINISIGN_SECRET_KEY }}
+        run: |
+          if [ -z "$HUB_MINISIGN_SECRET_KEY" ]; then
+            echo "::error::HUB_MINISIGN_SECRET_KEY is not set. The hub refuses an \
+          unsigned catalog, so publishing one would ship a hub that cannot update."
+            exit 1
+          fi
+          python tools/minisign.py sign catalog/catalog.json \
+            --trusted-comment "catalog $(date -u +%Y-%m-%dT%H:%M:%SZ) ci:${GITHUB_RUN_ID}"
+          python tools/minisign.py verify catalog/catalog.json \
+            --public-key catalog/catalog-signing.pub
+
+      - name: Check the tests still pass against the new catalog
+        run: python -m unittest discover -s tests
+
+      # Only decides whether to open a pull request. Publishing is
+      # catalog-publish.yml's job, triggered by that pull request being merged.
+      - name: Has anything actually changed?
+        id: changed
+        run: |
+          # `generated` moves on every run, so a nightly build that found nothing
+          # new still produces a diff. Comparing with that one line removed is
+          # the whole question: anything else that moved is a real change.
+          git show HEAD:catalog/catalog.json | grep -v '"generated"' > /tmp/before.json
+          grep -v '"generated"' catalog/catalog.json > /tmp/after.json
+          if diff -q /tmp/before.json /tmp/after.json >/dev/null; then
+            echo "nothing but the timestamp moved"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            diff -u /tmp/before.json /tmp/after.json | head -60 || true
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # A pull request, never a push. submodule-dispatch.yml already set that
+      # rule for cross-repository events and there is no reason this one gets an
+      # exception: an event anyone can fire should not move the default branch.
+      - name: Open a pull request
+        if: steps.changed.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: catalog/regenerate
+          base: main
+          commit-message: |
+            Regenerate the tool catalog
+
+            Rebuilt by .github/workflows/catalog.yml. Every artifact was
+            downloaded and hashed; a published checksum that disagreed with the
+            bytes would have failed the build rather than reaching this diff.
+          title: 'Regenerate the tool catalog'
+          body: |
+            One or more tools published a release, so `catalog/catalog.json` was
+            rebuilt and re-signed.
+
+            What to check before merging:
+
+            - the version and `sha256` moved for the tools you expected, and no
+              others
+            - `strip_prefix` and `launch.exe` still look right for anything whose
+              packaging changed — the generator verifies the entry point is in
+              the archive, so a wrong one fails the build, but a *moved* one
+              passes and is worth a look
+            - `sha256_source` still reads `published+verified` where it used to
+
+            Merging this publishes it: `catalog-publish.yml` uploads
+            `catalog.json` and its signature to the `catalog` release tag, which
+            is what installed hubs fetch.
+          labels: catalog
+          delete-branch: true

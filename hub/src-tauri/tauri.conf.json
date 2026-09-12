@@ -1,0 +1,62 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Hero Siege Toolkit",
+  "version": "0.1.0",
+  "identifier": "io.falorfrozen.herosiegetoolkithub",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:5177",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "hub",
+        "title": "Hero Siege Toolkit",
+        "width": 1180,
+        "height": 760,
+        "minWidth": 960,
+        "minHeight": 640,
+        "resizable": true,
+        "visible": true,
+        "decorations": false,
+        "transparent": false,
+        "shadow": true,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "dialog": false,
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFDREVFMzAwOEREODEzRTYKUldUbUU5aU5BT1BlSEJFcVJVaWIzWkVBMlF3a21CUUVaMWpocHRsZTV4cnoxRXQwVENLNGU2VVcK",
+      "endpoints": [
+        "https://github.com/falorfrozen-cmd/hero-siege-offline-toolkit/releases/latest/download/latest.json"
+      ]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "createUpdaterArtifacts": true,
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
+    "shortDescription": "One window for every Hero Siege offline tool",
+    "longDescription": "Installs, launches and updates the ten tools in the Hero Siege Offline Toolkit from a single window. Every artifact is checked against a SHA-256 pinned in a signed catalog before it is installed, and nothing a tool saves is ever moved or deleted by the hub.",
+    "category": "Utility",
+    "license": "MIT",
+    "copyright": "Copyright (c) 2026 falorfrozen-cmd and contributors"
+  }
+}

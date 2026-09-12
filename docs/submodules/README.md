@@ -18,6 +18,7 @@ This directory serves as the centralized repository for development, architectur
 | **HS Offline Loot Forge** | `Hs-Offline-Loot-Forge/` | [Hs-Offline-Loot-Forge Instructions](Hs-Offline-Loot-Forge/instructions.md) | Ready | Runtime loot table adjustments and targeted farming assistant. |
 | **Hero Siege Item Editor** | `hero-siege-item-editor/` | [hero-siege-item-editor Instructions](hero-siege-item-editor/instructions.md) | Ready | Item creator, stash editor, and inventory customizer. |
 | **HS Offline Stat Forge** | `hs-stat-forge/` | [hs-stat-forge Instructions](hs-stat-forge/instructions.md) | Ready | Runtime character stat tuner and monster density modifier. |
+| **Toolkit Hub** | `hub/` *(not a submodule)* | [Hub design](../hub/design.md) · [catalog schema](../hub/catalog-schema.md) | Ready | Tauri 2 + Svelte 5 desktop app that installs, launches and updates every tool above from a signed, hash-pinned catalog. |
 
 ---
 
