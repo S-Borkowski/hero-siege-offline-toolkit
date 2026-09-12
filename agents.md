@@ -142,11 +142,26 @@ close a line of investigation:
   logged a call - in the same build, in the same session. An instrument that
   cannot produce a non-zero anywhere has told you nothing about your target.
 - **Know how your instrument attaches, and whether the code under test can
-  reach it.** Table-swap hooks (`HookOneScript`) only see calls that go
-  through the table; address-patching hooks (`MmCreateHook`, as used by
-  `HookBuiltin` and `citrace nativetrace`) see the call itself. Prefer the
+  reach it.** Script-table swaps only see calls routed through the table;
+  address-patching hooks (`MmCreateHook`) see the call itself. Prefer the
   latter whenever a table-based hook reports zero, before concluding anything
   about the game.
+
+**The same blindness is a shipping bug, not only a research one.** A
+table-only hook prints "HOOK INSTALLED" and then silently changes nothing on
+the paths compiled GML actually uses - a feature that reports armed and does
+nothing. Origin's review of ForgePact PR #2 found direct native callers for
+`StatMovementSpeed`, `StatAttackSpeed`, `DropRelic`, `DropMonsterGold` and
+`DropGold`, so stat scaling, drop multipliers and the max-level relic filter
+were all in that state. `ForgePact`'s `HookOneScript` therefore installs
+**both** - the table swap and an inline detour at the function's own address -
+and hands the hook body the trampoline. `HookOneScriptTable` still exists for
+exactly one purpose: `citrace nativetrace` needs a deliberately table-only
+hook to compare against, and that comparison is what proved the problem.
+
+The general rule: **put the interception in the installer, not in whichever
+call sites a review happened to verify.** Fixing the five named functions
+would have left every other gameplay hook, and every future one, blind.
 - **Write the negative down as "not observed", not "does not happen"**, until
   a control backs it. Research docs in this repo are read later as settled
   fact; a mislabeled negative costs more sessions than the one that produced
