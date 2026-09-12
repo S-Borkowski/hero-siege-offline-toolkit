@@ -12,39 +12,92 @@
 
   const progress = $derived(progressFor(tool.id));
 
+  const PHASE_LABEL = {
+    started: 'Starting',
+    downloading: 'Downloading',
+    verifying: 'Verifying',
+    extracting: 'Extracting',
+    activating: 'Installing',
+  };
+
+  /**
+   * Is an install still running?
+   *
+   * `install_tool` resolves as soon as the backend has spawned its worker
+   * thread, so the promise returning means the install *started*. What says it
+   * is still going is the progress stream -- and without this the Install
+   * button came back live two frames after being clicked, which let a second
+   * install be started over the first.
+   */
+  const inFlight = $derived(
+    progress !== null && !['done', 'failed'].includes(progress.phase),
+  );
+
+  /**
+   * The version this card should claim, which is not always the one the backend
+   * has told us about yet.
+   *
+   * `done` is emitted before `library-changed` reaches the frontend, and in that
+   * gap the tool view still says nothing is installed -- so the card flashed
+   * "Not installed" and an Install button between finishing an install and
+   * being told it had finished. The version off the `done` event closes it.
+   */
+  const justInstalled = $derived(progress?.phase === 'done' ? progress.version : null);
+  const installedVersion = $derived(tool.installed_version ?? justInstalled);
+  const failed = $derived(progress?.phase === 'failed' ? progress : null);
+
   /**
    * The state chip. Order matters: a tool that is both running and has an
    * update should say Running, because that is what the player can act on.
    */
   const chip = $derived.by(() => {
-    if (progress && !['done', 'failed'].includes(progress.phase)) {
-      const label = {
-        started: 'Starting',
-        downloading: 'Downloading',
-        verifying: 'Verifying',
-        extracting: 'Extracting',
-        activating: 'Installing',
-      }[progress.phase] ?? 'Working';
+    if (inFlight) {
+      const label = PHASE_LABEL[progress.phase] ?? 'Working';
       const pct =
         progress.phase === 'downloading' && progress.total
           ? ` ${Math.min(100, Math.round((progress.received / progress.total) * 100))}%`
           : '';
       return { text: label + pct, tone: 'busy' };
     }
+    // An install that fails does so on a worker thread, long after the click
+    // returned, so nothing else in the interface would mention it.
+    if (failed) return { text: 'Install failed', tone: 'failed' };
     if (tool.running_pid) return { text: 'Running', tone: 'running' };
     if (tool.running_elsewhere) return { text: 'Running (outside the hub)', tone: 'running' };
     if (tool.staged) return { text: `Staged — ${tool.version}`, tone: 'staged' };
-    if (tool.update_available) {
+    // `update_available` was computed from the version on disk before this
+    // install; suppress it until the backend catches up, or the card offers to
+    // install again what it has just installed.
+    if (tool.update_available && !justInstalled) {
       return { text: `${tool.installed_version} → ${tool.version}`, tone: 'update' };
     }
-    if (tool.installed_version) return { text: `v${tool.installed_version}`, tone: 'ok' };
+    if (installedVersion) return { text: `v${installedVersion}`, tone: 'ok' };
     return { text: 'Not installed', tone: 'idle' };
   });
 
   const primary = $derived.by(() => {
+    if (inFlight) {
+      return {
+        label: PHASE_LABEL[progress.phase] ?? 'Working',
+        icon: 'install',
+        command: null,
+      };
+    }
     if (tool.running_pid) return { label: 'Stop', icon: 'stop', command: 'stop_tool' };
-    if (tool.update_available) return { label: 'Update', icon: 'install', command: 'install_tool' };
-    if (tool.installed_version) {
+    // Up, but not started by us, so there is no PID to stop. Offering Launch
+    // here just hits the tool's own single-instance lock.
+    if (tool.running_elsewhere) {
+      return {
+        label: 'Running',
+        icon: 'play',
+        command: null,
+        why: 'This was started outside the hub, so the hub cannot stop it. Close its own window.',
+      };
+    }
+    if (tool.update_available && !justInstalled) {
+      return { label: 'Update', icon: 'install', command: 'install_tool' };
+    }
+    if (installedVersion) {
       return {
         label: tool.artifact.kind === 'html' ? 'Open' : 'Launch',
         icon: 'play',
@@ -52,10 +105,11 @@
       };
     }
     if (tool.artifact.kind === 'nsis') return { label: 'Get it', icon: 'install', command: 'open_release' };
-    return { label: 'Install', icon: 'install', command: 'install_tool' };
+    return { label: failed ? 'Try again' : 'Install', icon: 'install', command: 'install_tool' };
   });
 
   async function runPrimary() {
+    if (!primary.command) return;
     working = true;
     try {
       if (primary.command === 'open_release') {
@@ -108,16 +162,19 @@
     <p class="counted">{bytes(progress.received)} of {bytes(progress.total)}</p>
   {:else if progress?.phase === 'verifying'}
     <p class="counted verifying">Checking SHA-256…</p>
+  {:else if failed}
+    <p class="counted broke">{failed.error}</p>
   {/if}
 
   <footer>
     <button
       class="primary skin skin-button"
       type="button"
-      disabled={working}
+      disabled={working || inFlight}
       onmouseenter={() => (hovered = 'primary')}
       onmouseleave={() => (hovered = '')}
       onclick={runPrimary}
+      title={primary.why ?? ''}
       style="--skin-src:url({art(hovered === 'primary' ? 'button_hover' : 'button')})"
     >
       <img src={art(hovered === 'primary' ? `${primary.icon}_hover` : primary.icon)} alt="" />
@@ -215,6 +272,7 @@
   .chip.running { color: var(--arcane); border-color: color-mix(in srgb, var(--arcane) 45%, var(--edge-4)); }
   .chip.staged { color: var(--rar-angelic); border-color: var(--edge-2b); }
   .chip.busy { color: var(--arcane); }
+  .chip.failed { color: var(--rar-satanic); border-color: color-mix(in srgb, var(--rar-satanic) 50%, var(--edge-4)); }
   .chip.warn { color: var(--bone-6); border-style: dashed; }
 
   .bar {
@@ -232,6 +290,7 @@
   }
   .counted { margin: 0 0 4px; font-size: 10.5px; color: var(--bone-4); }
   .counted.verifying { margin-top: 10px; color: var(--arcane); }
+  .counted.broke { margin-top: 10px; color: var(--rar-satanic); line-height: 1.45; }
 
   footer { display: flex; gap: 6px; align-items: stretch; margin-top: 10px; }
   .primary {

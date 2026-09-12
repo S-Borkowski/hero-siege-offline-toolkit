@@ -278,22 +278,84 @@ pub fn is_alive(pid: u32) -> bool {
     system.process(pid).is_some()
 }
 
+/// Depth-first walk of a process tree, children before parents.
+///
+/// Split out from `stop` so the ordering and the cycle guard are testable
+/// without spawning anything. `edges` is (pid, parent pid).
+fn tree_order(edges: &[(u32, Option<u32>)], root: u32) -> Vec<u32> {
+    let mut children: std::collections::HashMap<u32, Vec<u32>> =
+        std::collections::HashMap::new();
+    for (pid, parent) in edges {
+        if let Some(parent) = parent {
+            children.entry(*parent).or_default().push(*pid);
+        }
+    }
+    // A parent reported as its own ancestor would loop forever. It should not
+    // happen; `seen` means it cannot.
+    let mut seen = std::collections::HashSet::new();
+    let mut order = Vec::new();
+    let mut stack = vec![root];
+    while let Some(pid) = stack.pop() {
+        if !seen.insert(pid) {
+            continue;
+        }
+        order.push(pid);
+        if let Some(kids) = children.get(&pid) {
+            stack.extend(kids.iter().copied());
+        }
+    }
+    // Pre-order visits a parent before its children; reversed, children die
+    // first, so a parent cannot outlive the kill and respawn one.
+    order.reverse();
+    order
+}
+
+/// Stop a tool, and everything it started.
+///
+/// The PID the hub tracks is not always the application. A PyInstaller one-file
+/// build -- which is most of this toolkit -- runs a small bootloader that
+/// unpacks itself to a temporary directory, spawns the real program as a child,
+/// and waits for it. Killing only the tracked PID kills the bootloader and
+/// leaves the application running.
+///
+/// Measured on ForgePact 1.3.16: the hub spawned and tracked pid 55212, an 8 MB
+/// bootloader, while the 102 MB process actually serving `127.0.0.1:8766` was
+/// its child, pid 15952. Stop reported success, the window stayed open, and the
+/// port kept answering.
 pub fn stop(pid: u32) -> Result<()> {
     let mut system = sysinfo::System::new();
-    let pid = sysinfo::Pid::from_u32(pid);
-    system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), true);
-    let Some(process) = system.process(pid) else {
+    // The whole table, because the children are not known in advance -- and one
+    // snapshot rather than several, so the tree cannot change underneath the
+    // walk and lead to killing something unrelated that reused a PID.
+    system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+
+    let root = sysinfo::Pid::from_u32(pid);
+    if system.process(root).is_none() {
         // Already gone. The caller wanted it stopped; it is stopped.
         return Ok(());
-    };
-    if process.kill() {
-        Ok(())
-    } else {
-        Err(LaunchError::Io(format!(
+    }
+
+    let edges: Vec<(u32, Option<u32>)> = system
+        .processes()
+        .iter()
+        .map(|(pid, process)| (pid.as_u32(), process.parent().map(|p| p.as_u32())))
+        .collect();
+
+    for victim in tree_order(&edges, pid) {
+        if let Some(process) = system.process(sysinfo::Pid::from_u32(victim)) {
+            process.kill();
+        }
+    }
+
+    // Only the tracked process is worth failing over: a child that outlives its
+    // parent is usually one that was already exiting.
+    if is_alive(pid) {
+        return Err(LaunchError::Io(format!(
             "process {pid} would not stop. If it is running elevated, close it \
              from its own window."
-        )))
+        )));
     }
+    Ok(())
 }
 
 /// Ask a tool's own health endpoint whether it is up.
@@ -333,19 +395,32 @@ pub fn wait_until_healthy(tool: &Tool) -> bool {
     false
 }
 
-/// Is one of a tool's declared ports already taken?
-///
-/// Used to notice a copy started outside the hub, so the card does not offer
-/// Launch for something that is already up and then fail on the tool's own
-/// single-instance lock.
+/// Is anything listening on this loopback port?
+pub fn port_in_use(port: u16) -> bool {
+    std::net::TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+        Duration::from_millis(120),
+    )
+    .is_ok()
+}
+
 pub fn any_port_in_use(ports: &[u16]) -> bool {
-    ports.iter().any(|port| {
-        std::net::TcpStream::connect_timeout(
-            &std::net::SocketAddr::from(([127, 0, 0, 1], *port)),
-            Duration::from_millis(120),
-        )
-        .is_ok()
-    })
+    ports.iter().copied().any(port_in_use)
+}
+
+/// Is a copy of this tool already up that the hub did not start?
+///
+/// The health endpoint is the signal to prefer: it is the tool answering, not
+/// merely something holding a socket. Falling back to the declared ports is
+/// weaker than it looks -- ForgePact declares six because it tries them in
+/// turn, so an unrelated program on 9777 would be enough to make the hub claim
+/// ForgePact was running and refuse to launch it. Only the first port, the one
+/// it actually prefers, is treated as evidence.
+pub fn already_running(tool: &Tool) -> bool {
+    if let Some(health) = tool.launch.health.as_ref() {
+        return probe(health);
+    }
+    tool.launch.ports.first().copied().is_some_and(port_in_use)
 }
 
 pub fn submodule_path(repo_root: &Path, submodule: &str) -> PathBuf {
@@ -381,6 +456,75 @@ mod tests {
     #[test]
     fn stopping_something_that_is_already_gone_is_not_an_error() {
         assert!(stop(0xFFFF_FFF0).is_ok());
+    }
+
+    #[test]
+    fn a_process_tree_is_killed_children_first() {
+        // 100 -> 200 -> 400, and 100 -> 300. A PyInstaller bootloader is the
+        // 100 -> 200 edge, and killing 100 alone is what left ForgePact
+        // running with its window open and its port still answering.
+        let edges = [
+            (1u32, None),
+            (100, Some(1)),
+            (200, Some(100)),
+            (300, Some(100)),
+            (400, Some(200)),
+            (999, Some(1)),
+        ];
+        let order = tree_order(&edges, 100);
+
+        assert_eq!(order.len(), 4, "{order:?}");
+        assert!(!order.contains(&1), "walked up to the parent: {order:?}");
+        assert!(!order.contains(&999), "picked up an unrelated process: {order:?}");
+
+        let at = |pid: u32| order.iter().position(|p| *p == pid).unwrap();
+        assert!(at(400) < at(200), "grandchild must die before its parent");
+        assert!(at(200) < at(100), "child must die before its parent");
+        assert!(at(300) < at(100), "child must die before its parent");
+    }
+
+    #[test]
+    fn a_leaf_process_is_its_own_whole_tree() {
+        assert_eq!(tree_order(&[(5, Some(1))], 5), vec![5]);
+    }
+
+    #[test]
+    fn a_parent_cycle_does_not_hang_the_walk() {
+        // Not something Windows reports, but an infinite loop here would take
+        // the hub down rather than fail a stop.
+        let edges = [(10u32, Some(20)), (20, Some(10))];
+        let order = tree_order(&edges, 10);
+        assert_eq!(order.len(), 2);
+    }
+
+    #[test]
+    fn an_unrelated_listener_on_a_fallback_port_is_not_the_tool() {
+        // ForgePact declares six ports because it tries them in turn. Treating
+        // any of them as evidence means one unrelated program is enough to make
+        // the hub refuse to launch it.
+        let catalog = crate::catalog::embedded().unwrap().catalog;
+        let mut tool = catalog.tool("forgepact").unwrap().clone();
+        assert!(tool.launch.ports.len() > 1, "this test needs a fallback list");
+
+        // No health endpoint, so the ports are all there is to go on.
+        tool.launch.health = None;
+        let fallback = *tool.launch.ports.last().unwrap();
+        let listener = std::net::TcpListener::bind(("127.0.0.1", fallback));
+        if listener.is_ok() {
+            // Something on the last fallback port is not the tool.
+            assert!(!already_running(&tool));
+        }
+        drop(listener);
+    }
+
+    #[test]
+    fn a_tool_with_no_ports_and_no_endpoint_is_never_running_elsewhere() {
+        let catalog = crate::catalog::embedded().unwrap().catalog;
+        // Tkinter: nothing to probe, so the hub must not guess.
+        let tool = catalog.tool("hssaveeditor").unwrap();
+        assert!(tool.launch.ports.is_empty());
+        assert!(tool.launch.health.is_none());
+        assert!(!already_running(tool));
     }
 
     #[test]
