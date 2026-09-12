@@ -353,3 +353,123 @@ fn an_update_keeps_the_previous_version_and_can_be_rolled_back() {
     );
     std::fs::remove_dir_all(&root).ok();
 }
+
+/// The D5 interlock, end to end: download, refuse to apply, then apply.
+///
+/// `game::install_blocked_by` is unit-tested for every combination of tool and
+/// game running. What is not covered there is the mechanism around it -- that a
+/// blocked update is stored with its reason, survives a restart, and installs
+/// correctly once the reason is gone.
+///
+/// This cannot be driven through the interface yet: auto-download only runs
+/// after a successful remote catalog fetch, and the catalog has no published
+/// release tag to fetch from. So the mechanism is exercised here rather than
+/// left until it can be clicked.
+#[test]
+fn a_blocked_update_waits_with_its_reason_and_then_applies() {
+    use hero_siege_toolkit_hub_lib::game::{self, GameStatus};
+    use hero_siege_toolkit_hub_lib::state::{HubState, Installed, Staged};
+
+    let v1 = zip_bytes(&[("ForgePact-1.3.16/ForgePact.exe", b"MZ v1")]);
+    let server1 = Server::start(v1.clone());
+    let root = temp_root("staged");
+    let layout = Layout::new(&root);
+    layout.ensure().unwrap();
+
+    let first = tool(
+        server1.url("artifact.zip"),
+        verify::sha256_bytes(&v1),
+        v1.len() as u64,
+    );
+    let (emit, _p) = record();
+    let installed = install::install(&layout, &first, &emit).expect("install 1.3.16");
+
+    let mut hub_state = HubState::default();
+    hub_state.installed.insert("forgepact".into(), installed);
+
+    // A newer release arrives and is downloaded and verified, as auto-download
+    // would do.
+    let v2 = zip_bytes(&[("ForgePact-1.3.18/ForgePact.exe", b"MZ v2")]);
+    let server2 = Server::start(v2.clone());
+    let mut second = tool(
+        server2.url("artifact.zip"),
+        verify::sha256_bytes(&v2),
+        v2.len() as u64,
+    );
+    second.version = "1.3.18".into();
+    second.artifact.name = "ForgePact-1.3.18.zip".into();
+    second.artifact.strip_prefix = "ForgePact-1.3.18/".into();
+    let artifact = install::download(&second, &layout, &emit).expect("download 1.3.18");
+
+    // Hero Siege is up. ForgePact patches the game's PE and holds file IPC, so
+    // this is the case where applying now is how a player loses a character.
+    let playing = GameStatus {
+        running: true,
+        pid: Some(4242),
+        ..GameStatus::default()
+    };
+    let reason = game::install_blocked_by(&second.name, false, &playing)
+        .expect("a running game must block this");
+    assert!(reason.contains("Hero Siege is running"), "{reason}");
+
+    hub_state.staged.insert(
+        "forgepact".into(),
+        Staged {
+            version: second.version.clone(),
+            artifact_path: artifact.to_string_lossy().to_string(),
+            sha256: second.artifact.sha256.clone(),
+            staged_at: "2026-09-12T00:00:00Z".into(),
+            blocked_by: reason.clone(),
+        },
+    );
+    hub_state.save(&layout.state_file()).unwrap();
+
+    // What the player sees after a restart: still on 1.3.16, with 1.3.18 held
+    // and a sentence saying why.
+    let reloaded = HubState::load(&layout.state_file());
+    assert_eq!(reloaded.installed["forgepact"].version, "1.3.16");
+    let held = &reloaded.staged["forgepact"];
+    assert_eq!(held.version, "1.3.18");
+    assert!(held.blocked_by.contains("Hero Siege is running"));
+    assert!(
+        std::path::Path::new(&held.artifact_path).is_file(),
+        "the verified download must still be there to apply"
+    );
+    // Nothing was written over the live version while it was blocked.
+    assert_eq!(
+        std::fs::read(layout.version_dir("forgepact", "1.3.16").join("ForgePact.exe")).unwrap(),
+        b"MZ v1"
+    );
+
+    // The game closes. Nothing blocks it now, so it goes in.
+    let idle = GameStatus::default();
+    assert_eq!(game::install_blocked_by(&second.name, false, &idle), None);
+
+    let applied = install::install_artifact(
+        &layout,
+        &second,
+        std::path::Path::new(&held.artifact_path),
+        &emit,
+    )
+    .expect("apply the staged update");
+
+    assert_eq!(applied.version, "1.3.18");
+    assert_eq!(applied.previous.as_deref(), Some("1.3.16"));
+    assert_eq!(
+        std::fs::read(PathBuf::from(&applied.path).join("ForgePact.exe")).unwrap(),
+        b"MZ v2"
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// A tool of its own that is running blocks its update even with the game shut.
+#[test]
+fn a_running_tool_blocks_its_own_update_before_the_game_is_considered() {
+    use hero_siege_toolkit_hub_lib::game::{self, GameStatus};
+
+    let idle = GameStatus::default();
+    let reason = game::install_blocked_by("ForgePact", true, &idle)
+        .expect("a running tool must block its own update");
+    assert!(reason.starts_with("ForgePact"), "{reason}");
+    assert!(reason.contains("closed"), "{reason}");
+}
