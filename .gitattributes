@@ -1,0 +1,15 @@
+# The catalog is a signed artifact. Its minisign signature covers the exact
+# bytes of the file, so any line-ending conversion invalidates it.
+#
+# Git's `core.autocrlf` is on by default on Windows, including on GitHub's
+# windows runners, so a fresh clone there rewrote catalog.json with CRLF and
+# produced a catalog the hub refuses to load. The symptom was fourteen
+# signature failures that named everything except the cause, and it was
+# invisible locally: a file a tool writes and commits is never re-checked-out,
+# so it keeps the endings it was written with.
+#
+# `-text` disables conversion in both directions while leaving the file
+# diffable, which `binary` would not.
+catalog/catalog.json           -text
+catalog/catalog.json.minisig   -text
+catalog/catalog-signing.pub    -text
