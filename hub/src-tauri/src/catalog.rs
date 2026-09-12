@@ -13,11 +13,49 @@ use serde::{Deserialize, Serialize};
 
 use crate::verify;
 
+/// Which repository this build trusts for its catalog, its own updates, and its
+/// documentation links.
+///
+/// One value rather than four literals, because the four have to agree. They
+/// once did not: the hub fetched from a fork while the release-notification
+/// template told tool repositories to notify the canonical repository, so a new
+/// release would rebuild one catalog while every installed hub read another.
+///
+/// Worse than a broken link, had it merged upstream: every upstream user's hub
+/// would have fetched its catalog and its own updates from a personal fork's
+/// release assets.
+///
+/// `hub-release.yml` sets `HUB_REPO` from the repository running the workflow,
+/// so whichever repository publishes a hub builds one that points back at
+/// itself -- a fork's release checks the fork, the canonical release checks the
+/// canonical repository, and neither needs a source edit. The default is what a
+/// local `cargo build` gets.
+pub const HUB_REPO: &str = match option_env!("HUB_REPO") {
+    Some(repo) => repo,
+    None => "falorfrozen-cmd/hero-siege-offline-toolkit",
+};
+
 /// Where a signed catalog is published. The pair of files lives on a release
 /// tag rather than in the repository tree so that regenerating the catalog does
 /// not require a commit to be pushed before clients can see it.
-pub const CATALOG_URL: &str = "https://github.com/S-Borkowski/hero-siege-offline-toolkit/releases/download/catalog/catalog.json";
-pub const CATALOG_SIGNATURE_URL: &str = "https://github.com/S-Borkowski/hero-siege-offline-toolkit/releases/download/catalog/catalog.json.minisig";
+pub fn catalog_url() -> String {
+    format!("https://github.com/{HUB_REPO}/releases/download/catalog/catalog.json")
+}
+
+pub fn catalog_signature_url() -> String {
+    format!("https://github.com/{HUB_REPO}/releases/download/catalog/catalog.json.minisig")
+}
+
+/// The developer guide for a tool, in whichever repository this hub came from.
+/// Built here rather than in the interface so the frontend holds no opinion
+/// about which repository that is.
+pub fn guide_url(guide: &str) -> Option<String> {
+    let guide = guide.trim();
+    if guide.is_empty() {
+        return None;
+    }
+    Some(format!("https://github.com/{HUB_REPO}/blob/main/{guide}"))
+}
 
 /// The catalog this hub was built with. Also the answer when every other source
 /// fails, which is why "Work offline" is a usable setting rather than a broken
@@ -257,7 +295,7 @@ pub fn fetch_remote(timeout: Duration) -> Result<(Vec<u8>, String), String> {
 
     let mut payload = Vec::new();
     agent
-        .get(CATALOG_URL)
+        .get(&catalog_url())
         .call()
         .map_err(|e| format!("could not fetch the catalog: {e}"))?
         .into_reader()
@@ -269,7 +307,7 @@ pub fn fetch_remote(timeout: Duration) -> Result<(Vec<u8>, String), String> {
         .map_err(|e| format!("could not read the catalog: {e}"))?;
 
     let signature = agent
-        .get(CATALOG_SIGNATURE_URL)
+        .get(&catalog_signature_url())
         .call()
         .map_err(|e| format!("could not fetch the catalog signature: {e}"))?
         .into_string()
@@ -285,6 +323,58 @@ mod tests {
 
     fn loaded() -> LoadedCatalog {
         embedded().expect("the embedded catalog must verify")
+    }
+
+    #[test]
+    fn the_repo_is_the_override_when_set_and_the_canonical_one_otherwise() {
+        // Both halves matter, so both are asserted rather than one being
+        // skipped. Unset: a build must not point users at somebody's fork --
+        // the assertion that would have caught the four hardcoded
+        // `S-Borkowski/...` URLs before they could reach upstream. Set: the
+        // override must actually reach the constant, which also exercises
+        // `cargo:rerun-if-env-changed=HUB_REPO` in build.rs, since without it a
+        // cached build would answer with the previous value.
+        match option_env!("HUB_REPO") {
+            Some(repo) => assert_eq!(HUB_REPO, repo),
+            None => assert_eq!(HUB_REPO, "falorfrozen-cmd/hero-siege-offline-toolkit"),
+        }
+    }
+
+    #[test]
+    fn every_url_is_built_from_the_one_constant() {
+        for url in [catalog_url(), catalog_signature_url()] {
+            assert!(url.starts_with("https://github.com/"), "{url}");
+            assert!(url.contains(HUB_REPO), "{url} does not use HUB_REPO");
+        }
+        assert!(catalog_url().ends_with("/catalog/catalog.json"));
+        assert!(catalog_signature_url().ends_with(".minisig"));
+        // The signature must sit beside the catalog it covers.
+        assert_eq!(
+            catalog_signature_url(),
+            format!("{}.minisig", catalog_url())
+        );
+    }
+
+    #[test]
+    fn a_guide_path_becomes_a_link_and_an_empty_one_does_not() {
+        let url = guide_url("docs/submodules/ForgePact/instructions.md").unwrap();
+        assert_eq!(
+            url,
+            format!("https://github.com/{HUB_REPO}/blob/main/docs/submodules/ForgePact/instructions.md")
+        );
+        assert_eq!(guide_url(""), None);
+        assert_eq!(guide_url("   "), None);
+    }
+
+    #[test]
+    fn every_tool_in_the_catalog_yields_a_guide_link() {
+        for tool in &loaded().catalog.tools {
+            assert!(
+                guide_url(&tool.guide).is_some(),
+                "{} has no developer guide",
+                tool.id
+            );
+        }
     }
 
     #[test]

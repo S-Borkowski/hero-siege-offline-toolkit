@@ -80,6 +80,8 @@ pub struct HubInfo {
     pub log_path: String,
     pub repo_root: Option<String>,
     pub catalog_url: String,
+    /// Which repository this build trusts for its catalog and its own updates.
+    pub hub_repo: String,
     /// Normally false, and deliberately so -- the hub elevates tools per launch
     /// rather than running elevated itself.
     pub elevated: bool,
@@ -108,6 +110,9 @@ pub struct ToolView {
     pub running_elsewhere: bool,
     pub staged: Option<state::Staged>,
     pub source_available: bool,
+    /// Built from `HUB_REPO`, so the interface never has to know which
+    /// repository this build came from. None when the tool declares no guide.
+    pub guide_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -119,6 +124,7 @@ pub struct LibraryView {
     pub last_check: Option<String>,
     pub settings: state::Settings,
     pub game: game::GameStatus,
+    pub hub_repo: String,
 }
 
 fn build_view(hub: &Hub) -> Result<LibraryView, String> {
@@ -164,6 +170,7 @@ fn build_view(hub: &Hub) -> Result<LibraryView, String> {
             running_elsewhere: pid.is_none() && launch::already_running(tool),
             staged: hub_state.staged.get(&tool.id).cloned(),
             source_available,
+            guide_url: catalog::guide_url(&tool.guide),
             tool: tool.clone(),
         });
     }
@@ -176,6 +183,7 @@ fn build_view(hub: &Hub) -> Result<LibraryView, String> {
         last_check: hub_state.last_check,
         settings: hub_state.settings,
         game,
+        hub_repo: catalog::HUB_REPO.to_string(),
     })
 }
 
@@ -199,7 +207,8 @@ fn hub_info(hub: State<'_, Arc<Hub>>) -> HubInfo {
         install_root: hub.layout.root().to_string_lossy().to_string(),
         log_path: hub.log.path().to_string_lossy().to_string(),
         repo_root: hub.repo_root.as_ref().map(|p| p.to_string_lossy().to_string()),
-        catalog_url: catalog::CATALOG_URL.to_string(),
+        catalog_url: catalog::catalog_url(),
+        hub_repo: catalog::HUB_REPO.to_string(),
         elevated: hub.elevated,
     }
 }
@@ -691,8 +700,9 @@ pub fn run() {
     let logger = log::Log::new(layout.log_file());
     let elevated = launch::hub_is_elevated();
     logger.info(format!(
-        "hub {} starting; catalog {:?} generated {}; elevated {}",
+        "hub {} starting; repo {}; catalog {:?} generated {}; elevated {}",
         env!("CARGO_PKG_VERSION"),
+        catalog::HUB_REPO,
         loaded.source,
         loaded.catalog.generated,
         elevated
