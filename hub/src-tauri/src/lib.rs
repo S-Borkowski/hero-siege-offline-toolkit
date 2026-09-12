@@ -395,7 +395,12 @@ fn launch_tool(
             .ok_or_else(|| format!("{} is not installed", tool.name))?;
         launch::launch(&tool, &dir)
     }
-    .map_err(|e| e.to_string())?;
+    .map_err(|error| {
+        // Launch failures used to reach only the banner, which meant a report
+        // of one arrived as a screenshot rather than as a log line.
+        hub.log.error(format!("launching {id} failed: {error}"));
+        error.to_string()
+    })?;
 
     if let launch::Started::Process { pid } = started {
         if let Ok(mut running) = hub.running.lock() {
