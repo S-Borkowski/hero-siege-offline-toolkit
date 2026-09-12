@@ -48,6 +48,8 @@ windows-sys = { version = "0.59", features = [
     # SHELLEXECUTEINFOW carries an `hkeyClass: HKEY`, so the struct itself is
     # gated behind the registry feature even though nothing here reads it.
     "Win32_System_Registry",
+    # Reading this process's own token, to know whether Stop can work.
+    "Win32_Security",
 ] }
 
 [profile.release]

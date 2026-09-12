@@ -437,6 +437,55 @@ pub fn already_running(tool: &Tool) -> bool {
     tool.launch.ports.first().copied().is_some_and(port_in_use)
 }
 
+/// Is the hub itself running with Administrator rights?
+///
+/// Normally no, and deliberately so: the hub stays unelevated and elevates the
+/// three memory tools per launch, one prompt each. But a user can start it as
+/// Administrator, and whether they did decides something visible -- Windows
+/// will not let a medium-integrity process terminate a high-integrity one, so
+/// an unelevated hub cannot stop an elevated tool however hard it tries.
+#[cfg(windows)]
+pub fn hub_is_elevated() -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    let mut token: HANDLE = std::ptr::null_mut();
+    // SAFETY: `token` is written only if the call succeeds, and is closed below.
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        return false;
+    }
+    let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
+    let mut returned = 0u32;
+    // SAFETY: the out-buffer is a live `TOKEN_ELEVATION` and the size matches it.
+    let ok = unsafe {
+        GetTokenInformation(
+            token,
+            TokenElevation,
+            (&mut elevation as *mut TOKEN_ELEVATION).cast(),
+            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut returned,
+        )
+    };
+    unsafe { CloseHandle(token) };
+    ok != 0 && elevation.TokenIsElevated != 0
+}
+
+#[cfg(not(windows))]
+pub fn hub_is_elevated() -> bool {
+    false
+}
+
+/// Can the hub stop this tool once it is running?
+///
+/// The rule, rather than the attempt: an unelevated hub asking Windows to
+/// terminate an elevated process is refused every time, so offering Stop there
+/// is a button that cannot work. Confirmed by hand -- "process 66124 would not
+/// stop" on HS Value Scanner, launched through its own UAC prompt.
+pub fn can_stop(tool_elevates: bool, hub_elevated: bool) -> bool {
+    hub_elevated || !tool_elevates
+}
+
 pub fn submodule_path(repo_root: &Path, submodule: &str) -> PathBuf {
     repo_root.join(crate::paths::safe_component(submodule))
 }
@@ -529,6 +578,21 @@ mod tests {
             assert!(!already_running(&tool));
         }
         drop(listener);
+    }
+
+    #[test]
+    fn an_unelevated_hub_cannot_stop_an_elevated_tool() {
+        assert!(!can_stop(true, false), "this is the case that fails in Windows");
+        assert!(can_stop(false, false), "an ordinary tool is always stoppable");
+        // A hub someone started as Administrator can stop anything.
+        assert!(can_stop(true, true));
+        assert!(can_stop(false, true));
+    }
+
+    #[test]
+    fn reading_this_process_token_does_not_panic() {
+        // Whichever way the test runner was started, the call must answer.
+        let _ = hub_is_elevated();
     }
 
     #[test]

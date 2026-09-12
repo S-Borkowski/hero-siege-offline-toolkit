@@ -83,7 +83,19 @@
         command: null,
       };
     }
-    if (tool.running_pid) return { label: 'Stop', icon: 'stop', command: 'stop_tool' };
+    if (tool.running_pid && tool.can_stop) {
+      return { label: 'Stop', icon: 'stop', command: 'stop_tool' };
+    }
+    // Running, but elevated under an unelevated hub. Windows refuses the
+    // terminate every time, so Stop would be a button that cannot work.
+    if (tool.running_pid) {
+      return {
+        label: 'Running',
+        icon: 'stop',
+        command: null,
+        why: 'Started with Administrator rights, which the hub does not have. Close it from its own window.',
+      };
+    }
     // Up, but not started by us, so there is no PID to stop. Offering Launch
     // here just hits the tool's own single-instance lock.
     if (tool.running_elsewhere) {
