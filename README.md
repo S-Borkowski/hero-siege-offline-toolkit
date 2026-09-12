@@ -163,6 +163,11 @@ isn't re-derived from scratch later. Nothing here is implemented.
   anti-piracy layer in the first place, and what a real Steam ownership check in
   `HS-Offline-Launcher` would look like if the toolkit ever wanted one.
 
+- [Toolkit Hub: one app that installs, launches and updates every tool](docs/toolkit-hub-plan.md)
+  — why the hub owns windows and processes rather than tabs (five of the tools refuse
+  to be framed), why the ten repositories stay as submodules with the SDK coupling fixed
+  directly instead, and the signed catalog that pins a SHA-256 per release asset.
+
 ## Notes
 
 - Offline / single-player use only
