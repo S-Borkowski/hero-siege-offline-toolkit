@@ -305,23 +305,61 @@ is `ForgePact.exe` beside `modfiles/{AurieCore,YYToolkit,BloodPactPlugin}.dll` a
 
 Last run: all ten installed, and every entry point was where the catalog said.
 
-### Still worth doing by hand
+### Confirmed by hand
 
-The parts no test reaches, because they need the game, elevation, or a person
-watching:
+Driven through the real window on 2026-09-12. Recorded because these are the
+checks a test cannot make, and because three of them found defects.
 
-- Launch ForgePact from the hub; confirm `http://127.0.0.1:8766/` answers, the
-  card turns to *Running*, and Stop ends it.
-- Launch one of the three elevating tools: the UAC prompt should appear once,
-  declining it should read as a decision rather than an error, and accepting it
-  should still yield a card that says *Running* and can be stopped.
-- Corrupt one `sha256` in `catalog/catalog.json`, re-sign, and confirm the
-  install **refuses** rather than falling through.
-- Start `Hero_Siege.exe`, trigger an auto-install, confirm it stages rather than
-  applying, and applies on next launch once the game has closed.
-- Toggle Work offline and confirm zero outbound requests on launch.
-- `tools/freeze_probe.ps1` if a hub-launched tool is suspected of stalling the
-  game — the existing instrument, not a new one.
+| Check | Outcome |
+| --- | --- |
+| Install ForgePact from its release | Extracted tree matches `build_release.py`; hash pinned in the catalog matched the bytes |
+| Launch, health, Running, Stop | `127.0.0.1:8766` answered 200; card tracked state correctly |
+| Stop leaves nothing behind | **Found a defect.** See "Stop kills a tree" below |
+| Elevation, prompt declined | Reported as a sentence, card returns to Launch |
+| Elevation, prompt accepted | Card reads Running against the elevated PID |
+| Stop on an elevated tool | Refused by Windows, as it must be; the card no longer offers it |
+| A catalog pinning the wrong hash | Install refused, nothing written, both hashes named |
+| Work offline | `Check for updates` refused by the Rust guard, not merely a disabled button |
+| Verify files | Re-hashed the install against its manifest, offline |
+| `kind: "html"` | Opened in the browser rather than spawned |
+| Uninstall | Removed, back to *Not installed* |
+
+#### Stop kills a tree
+
+Worth keeping because it will recur. The PID the hub spawns is not always the
+application: a PyInstaller one-file build runs a bootloader that unpacks itself,
+spawns the real program as a child and waits. ForgePact 1.3.16 gave tracked pid
+55212 (8 MB bootloader) and pid 15952 (102 MB, the process actually serving
+8766). Killing the tracked PID reported success while the window stayed open and
+the port kept answering. `stop` now kills the tree children-first.
+
+#### Elevation cannot be tested from a sandbox
+
+The first attempt produced a bare Windows dialog saying "The specified path does
+not exist" over a path that plainly did. The cause was not the hub: the dev app
+had been started from a sandboxed shell where `%LOCALAPPDATA%\Hero Siege
+Toolkit` is a redirect into an app-container LocalCache. The hub installed there;
+the elevation broker, running as SYSTEM outside the container, resolved the
+literal path and found nothing.
+
+Run the hub from an ordinary terminal when testing elevation. (The dialog itself
+was a real defect and is fixed -- `SEE_MASK_FLAG_NO_UI` -- so the failure now
+comes back as a value the hub reports and logs.)
+
+### Still blocked
+
+**The game-running interlock.** Auto-download only runs after a successful
+remote catalog fetch, and there is no published `catalog` release tag to fetch
+from yet, so staging cannot be reached through the interface. The mechanism is
+covered by `a_blocked_update_waits_with_its_reason_and_then_applies` in
+`tests/install_e2e.rs`; redo it by hand after Phase 4's first publish.
+
+**Rollback through the interface**, for the same reason -- it needs two versions
+of a tool, which needs a catalog that offers a second one. Covered by
+`an_update_keeps_the_previous_version_and_can_be_rolled_back`.
+
+`tools/freeze_probe.ps1` remains the instrument if a hub-launched tool is ever
+suspected of stalling the game.
 
 
 ## Out of scope
