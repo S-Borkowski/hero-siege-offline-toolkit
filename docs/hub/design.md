@@ -241,13 +241,28 @@ browser and the whole frontend is workable without the Rust side running.
 
 | Workflow | Trigger | What it does |
 | --- | --- | --- |
-| `.github/workflows/catalog.yml` | `repository_dispatch: release-published`, nightly, manual | Rebuilds and re-signs the catalog, **opens a pull request**, and publishes to the `catalog` release tag once main agrees. |
+| `.github/workflows/catalog.yml` | `repository_dispatch: release-published`, nightly, manual | Rebuilds and re-signs the catalog, then **opens a pull request**. Publishes nothing. |
+| `.github/workflows/catalog-publish.yml` | push to `main` touching `catalog/`, manual | Verifies the signature and uploads the catalog to the `catalog` release tag. |
 | `.github/workflows/hub-release.yml` | `hub-v*` tag, manual dry run | Tests, builds, signs, and publishes the hub plus `latest.json`. |
 | `.github/workflow-templates/notify-hub-release.example.yml` | — | The sending half, to copy into a tool repository. |
 
 The catalog workflow opens a pull request rather than pushing, matching the rule
 `submodule-dispatch.yml` already set: an event anyone can fire should not move
 the default branch.
+
+Proposing and publishing are separate workflows because they answer to different
+events. Publishing was once a step inside the regenerate job, conditioned on the
+rebuild finding *nothing to change* -- which made the release tag a side effect
+of a no-op, and meant merging a catalog change published nothing until some
+later run happened to find no further change. Merging is the event that should
+publish, so merging is what triggers it.
+
+`catalog-publish.yml` passes `--latest=false` when it creates the release, and
+that flag is load-bearing. GitHub picks the latest release by date unless told
+otherwise, and the hub's updater endpoint is
+`releases/latest/download/latest.json` -- so a catalog release allowed to become
+"latest" would quietly stop the hub being able to update itself until the next
+hub release displaced it.
 
 ### Repository secrets
 
