@@ -167,10 +167,14 @@
   {/if}
 
   <footer>
+    <!-- `primary.command` is null when the button is a status rather than an
+         action: mid-install, or running outside the hub. Guarding only the
+         click handler was not enough -- it left a button that looked live and
+         did nothing when pressed. -->
     <button
       class="primary skin skin-button"
       type="button"
-      disabled={working || inFlight}
+      disabled={working || !primary.command}
       onmouseenter={() => (hovered = 'primary')}
       onmouseleave={() => (hovered = '')}
       onclick={runPrimary}
