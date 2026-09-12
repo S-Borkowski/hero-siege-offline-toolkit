@@ -141,7 +141,10 @@ fn spawn_elevated(entry: &Path, args: &[String], cwd: &Path) -> Result<u32> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::System::Threading::GetProcessId;
-    use windows_sys::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW};
+    use windows_sys::Win32::UI::Shell::{
+        ShellExecuteExW, SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS,
+        SHELLEXECUTEINFOW,
+    };
     use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
     fn wide(text: &std::ffi::OsStr) -> Vec<u16> {
@@ -162,7 +165,14 @@ fn spawn_elevated(entry: &Path, args: &[String], cwd: &Path) -> Result<u32> {
     // uninitialised.
     let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
     info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
-    info.fMask = SEE_MASK_NOCLOSEPROCESS;
+    // NOCLOSEPROCESS is what hands back a usable process handle.
+    // FLAG_NO_UI stops the shell putting up its own error dialog -- without it
+    // a failure here appeared as a bare Windows box saying "The specified path
+    // does not exist" over a path that plainly did, with nothing in the hub's
+    // own error surface and nothing in its log.
+    // NOASYNC because this runs on a thread with no message loop that may
+    // return before the shell is finished with the request.
+    info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI | SEE_MASK_NOASYNC;
     info.lpVerb = verb.as_ptr();
     info.lpFile = file.as_ptr();
     info.lpDirectory = directory.as_ptr();
@@ -182,9 +192,13 @@ fn spawn_elevated(entry: &Path, args: &[String], cwd: &Path) -> Result<u32> {
                 entry.file_name().unwrap_or_default().to_string_lossy()
             )));
         }
+        // `hInstApp` carries an SE_ERR_* code that is often more specific than
+        // GetLastError, and the two disagreeing is itself worth knowing.
         return Err(LaunchError::Elevation(format!(
-            "could not start {} elevated: {error}",
-            entry.display()
+            "could not start {} elevated: {error} (ShellExecuteEx returned {ok},              hInstApp {}, path {} bytes)",
+            entry.display(),
+            info.hInstApp as isize,
+            entry.as_os_str().len(),
         )));
     }
 
