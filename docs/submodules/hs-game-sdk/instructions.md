@@ -52,8 +52,8 @@ hs-game-sdk/
 │       ├── rooms.hpp           # enum class GameRoom
 │       ├── stats.hpp           # Stat constants & proc families
 │       ├── yytk_helpers.hpp    # Typed helper wrappers for YYTKInterface
-│       ├── hooks.hpp           # Declarative script hook macros (HS_INSTALL_SCRIPT_HOOK)
-│       ├── player.hpp          # Player discovery, inventory & maxed relic scanners
+│       ├── hooks.hpp           # InstallScriptHook: table swap + inline detour, repeat-safe
+│       ├── player.hpp          # Player discovery; relic scanners (positive ID only)
 │       ├── satanic_zone.hpp    # HeroSiege::SatanicZone::kBuffs/kDebuffs, generated from curated/satanic_zone.json
 │       └── hs_game_sdk.hpp     # Main aggregate header
 ├── ts/                         # TypeScript / ESM SDK for web and UI modules
@@ -193,8 +193,110 @@ import { GameObject, GameScripts, StatId } from '@hero-siege/sdk';
 | --- | --- | --- | --- |
 | `py -3 tools/extract_and_generate_sdk.py --game-bin "<path-to-game-bin>"` | Workspace Root | Re-extract symbols from `data.win` and regenerate all SDK bindings | Verified |
 | `py -3 tools/generate_satanic_zone_sdk.py` | Workspace Root | Regenerate `satanic_zone.py`/`.hpp`/`.ts` from `hs-game-sdk/curated/satanic_zone.json` (hand-edited, not extracted) | Verified 2026-09-10 |
-| `py -3 -m unittest discover tests` | Workspace Root | Run full SDK verification test suite | Verified |
+| `py -3 -m unittest discover -s tests` | Workspace Root | Run the SDK test suite. Passes in a clean checkout; extraction- and compiler-dependent suites skip (see below) | Verified 2026-09-12 |
+| `py -3 -m unittest tests.test_cpp_sdk -v` | Workspace Root | Compile and run the C++ relic/hook behavioural tests against the stubbed YYToolkit surface | Verified 2026-09-12 |
 | `py -3 -m pip install -e hs-game-sdk/python` | Workspace Root | Install Python SDK in development mode | Verified |
+
+### Which tests need a game install, and which do not
+
+`py -3 -m unittest discover -s tests` passes from a clean checkout with no game
+installed and no build tools. Anything that cannot run there **skips** rather than
+fails, because `hs-game-sdk/data/` is gitignored extraction output that no
+contributor can be assumed to have:
+
+| Suite | Needs | Behaviour without it |
+| --- | --- | --- |
+| `test_sdk_python.py`, `test_expanded_sdk.py`, `test_relic_identification.py` | nothing | always runs |
+| `test_sdk_all.py` → `TestSdkArtifacts` | nothing | always runs |
+| `test_sdk_all.py` → `TestExtractedDataArtifacts` | `hs-game-sdk/data/` | skips |
+| `test_object_hierarchy.py` → `TestObjectParentChain` | nothing (reads the tracked bindings) | always runs |
+| `test_object_hierarchy.py` → `TestObjectsJsonMatchesBindings` | `hs-game-sdk/data/` | skips |
+| `test_extractor_layout.py` | nothing (builds a synthetic `data.win`) | always runs |
+| `test_cpp_sdk.py` | Windows + MSVC or g++/clang++ | skips |
+
+`test_extractor_layout.py` is how the OBJT offsets stay verifiable without the
+game: it writes a tiny GameMaker IFF file by hand, with each field at its
+documented offset and a distinct value, so a one-field shift fails immediately.
+
+`test_cpp_sdk.py` compiles `tests/cpp/test_sdk_player_hooks.cpp` against the
+**unchanged** production headers, with the YYToolkit and Aurie surfaces supplied
+by `tests/cpp/stubs/`. Because the SDK detects YYToolkit with
+`__has_include(<YYToolkit/YYTK_Shared.hpp>)`, putting the stubs on the include
+path is enough to compile the real code paths and drive them with controlled
+responses - no Aurie runtime, no DLL in the game, no live game.
+
+---
+
+## Runtime helper semantics
+
+### `Player::GetOwnedRelicLevels` / `GetMaxedRelicIds` — relic identification
+
+An item counts as a relic only on **positive identification**: rarity tier 16 via
+`c` / `cls` / `itemType`, or the relic-specific `relicLevel` field. Level is read
+only from `o`, `level` and `relicLevel`.
+
+A level-shaped field is not evidence of relic-ness, and this was a real defect
+(REPORTED 2026-09-12 against PR #3): the scanner accepted `isRelic || level > 0`,
+so the ordinary item `{b:15, c:8, level:100}` was reported as maxed relic 15.
+`ForgePact`'s `RelicFilterMod` calls `GetMaxedRelicIds` directly, so that false
+positive could suppress an unrelated relic drop. `p` is a star upgrade count and
+stacks carry `amount`/`count`/`qty`, so the old field list both invented relics
+and inflated levels past the maxed threshold.
+
+Container shape matters too, via `Player::ContainerKind`:
+
+| Kind | Containers | A bare number means |
+| --- | --- | --- |
+| `General` | `equippedItems`, `inventory`, `bags` | nothing - item structs only |
+| `RelicTable` | `relic_levels`, `relics`, `relic_tab`, `relic_array`, `pRelics`, `relic_inventory`, `relics_collected`, `inventory_relic_tab`, `relicPage` | `relic id -> level` |
+
+This matches `scan_relic_levels()` in the Python SDK; the two are tested against
+one shared fixture.
+
+### `Hooks::InstallScriptHook` — both call routes, and safe to install twice
+
+```cpp
+static PFUNC_YYGMLScript g_origDropRelic = nullptr;  // static, zero-initialised
+
+HeroSiege::Hooks::ScriptHookOptions options;
+options.selfModule = g_ArSelfModule;      // required for native interception
+options.hookId = "forgepact_drop_relic";  // required, unique per detour
+const auto result = HeroSiege::Hooks::InstallScriptHook(
+    yytk, "gml_Script_DropRelic", &Hook_DropRelic, &g_origDropRelic, options);
+if (!result.IsNative()) {
+    Log(std::string("table-only: ") + result.note);  // surface it, do not ignore it
+}
+```
+
+A script-table swap alone catches only calls the game routes through the table;
+compiled GML also calls straight into the function's address. So the installer
+does **both** - the table swap and an inline detour - and `*outOriginalFunc`
+becomes the trampoline, reaching the real original from either route without
+re-entering the hook. See the "Prove the Instrument" rule in
+[`agents.md`](../../../agents.md).
+
+Check `result.kind`:
+
+| Kind | Meaning |
+| --- | --- |
+| `Native` | both routes covered |
+| `TableOnly` | the detour could not be installed; `note` says why, and direct compiled-GML calls bypass the hook |
+| `AlreadyInstalled` | a hook was already present; the recorded original was left alone |
+| `Failed` | nothing was installed |
+
+Repeat installation is safe, which matters because a shared chokepoint gets hooked
+from more than one call site. The detour is attempted only on the first install
+(`!*outOriginalFunc`) - the one moment the table still holds the game's own
+function - and the table entry must be executable code inside the game module, or
+it is not ours to patch. Pass a **static, zero-initialised** original pointer: it
+is how the installer knows which install is the first.
+
+`InstallScriptHookTableOnly` is a deliberately limited variant, named so the
+limitation is visible at the call site. It exists for research - observing
+table-routed calls without patching code - and still preserves the original
+across repeat installs. It is not what a shipped gameplay hook should use.
+
+---
 
 ### Never hand-edit a generated file
 

@@ -97,7 +97,28 @@ static RValue& Hook_DropRelic(CInstance* S, CInstance* O, RValue& R, int argc, R
     return g_Orig_DropRelic ? g_Orig_DropRelic(S, O, R, argc, A) : R;
 }
 
-void RegisterHooks(YYTKInterface* yytk) {
-    HS_INSTALL_SCRIPT_HOOK(yytk, HeroSiege::Scripts::gml_Script_DropRelic, Hook_DropRelic, g_Orig_DropRelic);
+void RegisterHooks(YYTKInterface* yytk, Aurie::AurieModule* self) {
+    // selfModule + hookId are what let the installer add an inline detour on top
+    // of the script-table swap. Without both it falls back to table-only, and
+    // the calls compiled GML makes directly into the function bypass the hook -
+    // so check the result instead of assuming success.
+    HeroSiege::Hooks::ScriptHookOptions options;
+    options.selfModule = self;
+    options.hookId = "example_drop_relic";
+
+    const auto result = HS_INSTALL_SCRIPT_HOOK(
+        yytk, HeroSiege::Scripts::gml_Script_DropRelic, Hook_DropRelic, g_Orig_DropRelic, options);
+    if (!result.IsNative()) {
+        // Log it: result.note says why, e.g. "table entry is not executable code
+        // inside the game module".
+    }
 }
 ```
+
+`g_Orig_DropRelic` must be **static and zero-initialised**: the installer uses
+`*outOriginalFunc == nullptr` to tell a first install from a repeat one, which is
+what makes installing the same hook from two call sites safe. On a repeat it
+returns `AlreadyInstalled` and leaves the saved original alone, so forwarding
+through it can never re-enter the hook. See
+[`docs/submodules/hs-game-sdk/instructions.md`](submodules/hs-game-sdk/instructions.md)
+for the full semantics.

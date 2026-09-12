@@ -163,6 +163,18 @@ The general rule: **put the interception in the installer, not in whichever
 call sites a review happened to verify.** Fixing the five named functions
 would have left every other gameplay hook, and every future one, blind.
 
+**And the rule applies to every installer, including a shared one.** Origin's
+review of hub PR #3 found `hs-game-sdk`'s own `HeroSiege::Hooks::InstallScriptHook`
+- the API other submodules are told to adopt - still table-only, and worse,
+overwriting the saved original with the hook itself on a second install, so a
+hook body forwarding through that pointer would recurse into itself. The shared
+installer now does what ForgePact's does: both routes, trampoline as the
+original, detour attempted only on the first install, and a result that *says*
+`TableOnly` with a reason rather than reporting plain success.
+`InstallScriptHookTableOnly` is the deliberately-limited variant, named so the
+limitation is visible at the call site. A correction landing in one submodule is
+not done until the shared SDK that other submodules copy has it too.
+
 ## Check a Permission Where It Is Used, Not Where It Is Convenient
 
 `EVENT_FRAME` (what `FrameCallback`/`OnFrame` run on) is dispatched from
@@ -349,3 +361,23 @@ When developing, modifying, testing, or reverse-engineering game logic, hooks, d
 - In **TypeScript / Web** submodules (`HSCraftSim`, `HS-Offline-Tracker/src`), import from `@hero-siege/sdk`.
 - Avoid declaring raw string literals or magic numbers for game scripts, asset indices, object types, and stat keys when equivalent constants exist in `hs-game-sdk`.
 - If game updates shift asset or script indices, regenerate the SDK bindings using `tools/extract_and_generate_sdk.py`.
+
+**Identify a thing by what it is, not by a field it happens to carry.** Origin's
+review of hub PR #3 found the C++ relic scanner accepting any item with a level
+field, so the ordinary item `{b:15, c:8, level:100}` came back as maxed relic 15
+- and `ForgePact`'s `RelicFilterMod` calls that scanner directly, so an unrelated
+item could suppress a real relic drop. Level-shaped fields are everywhere in this
+game's item structs (`p` is a star upgrade count, stacks carry
+`amount`/`count`/`qty`), so "has a level" identifies nothing. Use the documented
+positive signal instead - rarity tier 16, or the relic-specific `relicLevel` field
+(`docs/RUNTIME_DATA_MODELS.md`) - and read the value only from the fields
+documented to hold it. The same applies to shape: a bare number is only a
+`relic id -> level` entry inside a container that is specifically a relic table,
+never in a general inventory.
+
+**When two language bindings answer the same question, test them against the same
+fixture.** The Python scanner was already correct while the C++ one was not, and
+nothing caught the divergence because only Python had tests.
+`tests/test_relic_identification.py` and `tests/cpp/test_sdk_player_hooks.cpp` are
+the paired halves, and `tests/test_cpp_sdk.py` asserts both produce the same
+result from the same input.

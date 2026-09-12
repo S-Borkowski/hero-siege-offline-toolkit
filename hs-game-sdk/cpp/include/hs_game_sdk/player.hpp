@@ -37,14 +37,56 @@ inline bool ResolveLocalPlayer(YYTKInterface* yytk, RValue& outPlayer) {
     return false;
 }
 
+/// Rarity tier that identifies an item as a relic (docs/RUNTIME_DATA_MODELS.md).
+inline constexpr int kRelicRarityTier = 16;
+/// Season 10 relic ids run 0..155; this is the exclusive upper bound used to
+/// reject ids that cannot be relics.
+inline constexpr int kRelicIdLimit = 160;
+/// A relic at this level or above is maxed.
+inline constexpr int kMaxedRelicLevel = 10;
+
 /**
- * Fast, non-recursive inspection of item structs, inventory arrays, and dedicated relic containers.
- * Populates outRelicLevels with relic IDs (type `b`) and their highest level/count.
+ * What a container is, which decides how a bare number inside it is read.
+ *
+ * A numeric array is only a relic-level table in a container that is
+ * specifically about relics. In a general container - equipped items, bags -
+ * numbers are anything at all, and reading them as `relic id -> level` invents
+ * relics out of unrelated data.
+ */
+enum class ContainerKind {
+    General,
+    RelicTable,
+};
+
+/**
+ * Populates outRelicLevels with relic ids (field `b`) and their highest level.
+ *
+ * An item counts as a relic only on POSITIVE identification: rarity tier 16 via
+ * `c` / `cls` / `itemType`, or the relic-specific `relicLevel` field. A
+ * level-shaped field is not evidence on its own.
+ *
+ * REPORTED 2026-09-12 by origin's review of PR #3, and reproduced: accepting
+ * `isRelic || level > 0` classified the ordinary item `{b:15, c:8, level:100}`
+ * as maxed relic 15. ForgePact's RelicFilterMod calls GetMaxedRelicIds
+ * directly, so a false positive there suppresses an unrelated relic drop.
+ * Two measured facts make "has a level" unusable as a relic test:
+ *
+ *   - Ordinary items carry level-shaped fields of their own. `p` is a star
+ *     upgrade count and stacks carry `amount`/`count`/`qty`, so the old field
+ *     list both invented relics and inflated levels past the maxed threshold.
+ *     Only the three documented relic level fields are read now.
+ *   - The previous `g` in 10..14 signal had no measured basis in
+ *     docs/RUNTIME_DATA_MODELS.md, and could only add false positives. Equipped
+ *     relics are already identified by rarity tier 16, so it is gone.
+ *
+ * This now matches scan_relic_levels() in the Python SDK, which is the
+ * behaviour the review benchmarked against.
  */
 inline void ScanContainerForRelics(
     YYTKInterface* yytk,
     const RValue& container,
     std::unordered_map<int, int>& outRelicLevels,
+    ContainerKind kind = ContainerKind::General,
     int depth = 0
 ) {
     if (!yytk || depth > 2) return;
@@ -53,7 +95,7 @@ inline void ScanContainerForRelics(
             // 1. If this is a slot container wrapping an inner 'data' struct:
             if (YYTK::StructHasVariable(yytk, container, "data")) {
                 RValue innerData = YYTK::GetStructVariable(yytk, container, "data");
-                ScanContainerForRelics(yytk, innerData, outRelicLevels, depth + 1);
+                ScanContainerForRelics(yytk, innerData, outRelicLevels, kind, depth + 1);
             }
 
             // 2. Direct item inspection
@@ -67,39 +109,33 @@ inline void ScanContainerForRelics(
                 b = static_cast<int>(YYTK::GetStructVariable(yytk, container, "relicId").ToDouble());
             }
 
-            if (YYTK::StructHasVariable(yytk, container, "cls")) {
-                int cls = static_cast<int>(YYTK::GetStructVariable(yytk, container, "cls").ToDouble());
-                if (cls == 16) isRelic = true;
+            // Positive identification: the rarity tier says relic, ...
+            for (const char* tierField : { "c", "cls", "itemType" }) {
+                if (YYTK::StructHasVariable(yytk, container, tierField)) {
+                    const int tier = static_cast<int>(YYTK::GetStructVariable(yytk, container, tierField).ToDouble());
+                    if (tier == kRelicRarityTier) {
+                        isRelic = true;
+                        break;
+                    }
+                }
             }
-            if (YYTK::StructHasVariable(yytk, container, "c")) {
-                int c = static_cast<int>(YYTK::GetStructVariable(yytk, container, "c").ToDouble());
-                if (c == 16) isRelic = true;
-            }
-            if (YYTK::StructHasVariable(yytk, container, "itemType")) {
-                int it = static_cast<int>(YYTK::GetStructVariable(yytk, container, "itemType").ToDouble());
-                if (it == 16) isRelic = true;
-            }
-            if (YYTK::StructHasVariable(yytk, container, "g")) {
-                int g = static_cast<int>(YYTK::GetStructVariable(yytk, container, "g").ToDouble());
-                if (g >= 10 && g <= 14) isRelic = true;
+            // ... or the item carries the relic-specific level field.
+            if (YYTK::StructHasVariable(yytk, container, "relicLevel")) {
+                isRelic = true;
             }
 
-            // Check level / amount fields
-            for (const char* lField : { "o", "level", "relicLevel", "amount", "count", "stack", "qty", "p" }) {
+            // Level comes only from the three documented relic level fields.
+            for (const char* lField : { "o", "level", "relicLevel" }) {
                 if (YYTK::StructHasVariable(yytk, container, lField)) {
-                    int val = static_cast<int>(YYTK::GetStructVariable(yytk, container, lField).ToDouble());
+                    const int val = static_cast<int>(YYTK::GetStructVariable(yytk, container, lField).ToDouble());
                     if (val > level) level = val;
-                    if (strcmp(lField, "relicLevel") == 0) isRelic = true;
                 }
             }
 
-            // Valid relic ID range in Season 10 is 0..155
-            if (b >= 0 && b < 160) {
-                if (isRelic || level > 0) {
-                    if (level == 0) level = 1;
-                    if (outRelicLevels.find(b) == outRelicLevels.end() || level > outRelicLevels[b]) {
-                        outRelicLevels[b] = level;
-                    }
+            if (isRelic && b >= 0 && b < kRelicIdLimit) {
+                if (level <= 0) level = 1;
+                if (outRelicLevels.find(b) == outRelicLevels.end() || level > outRelicLevels[b]) {
+                    outRelicLevels[b] = level;
                 }
             }
         } else if (container.m_Kind == ::YYTK::VALUE_ARRAY) {
@@ -109,15 +145,16 @@ inline void ScanContainerForRelics(
             for (int i = 0; i < len; ++i) {
                 RValue child = YYTK::GetArrayElement(yytk, container, i);
                 if (child.m_Kind == ::YYTK::VALUE_REAL || child.m_Kind == ::YYTK::VALUE_INT32 || child.m_Kind == ::YYTK::VALUE_INT64) {
-                    // Direct numeric array indexed by relic ID
-                    if (i < 160) {
-                        int numVal = static_cast<int>(child.ToDouble());
+                    // A bare number is a relic level indexed by relic id only in
+                    // a container that is specifically a relic table.
+                    if (kind == ContainerKind::RelicTable && i < kRelicIdLimit) {
+                        const int numVal = static_cast<int>(child.ToDouble());
                         if (numVal > 0 && (outRelicLevels.find(i) == outRelicLevels.end() || numVal > outRelicLevels[i])) {
                             outRelicLevels[i] = numVal;
                         }
                     }
                 } else if (child.m_Kind == ::YYTK::VALUE_OBJECT || child.m_Kind == ::YYTK::VALUE_ARRAY) {
-                    ScanContainerForRelics(yytk, child, outRelicLevels, depth + 1);
+                    ScanContainerForRelics(yytk, child, outRelicLevels, kind, depth + 1);
                 }
             }
         }
@@ -132,20 +169,24 @@ inline std::unordered_map<int, int> GetOwnedRelicLevels(YYTKInterface* yytk, con
     if (!yytk || player.m_Kind != ::YYTK::VALUE_OBJECT) return relicMap;
 
     try {
-        // 1. Equipped items array
-        if (YYTK::InstanceHasVariable(yytk, player, "equippedItems")) {
-            RValue eq = YYTK::GetInstanceVariable(yytk, player, "equippedItems");
-            ScanContainerForRelics(yytk, eq, relicMap, 0);
+        // 1. General containers: item structs only, each positively identified.
+        //    A bare number in here is not a relic level.
+        for (const char* varName : { "equippedItems", "inventory", "bags" }) {
+            if (YYTK::InstanceHasVariable(yytk, player, varName)) {
+                RValue val = YYTK::GetInstanceVariable(yytk, player, varName);
+                ScanContainerForRelics(yytk, val, relicMap, ContainerKind::General, 0);
+            }
         }
 
-        // 2. Inventory / Bags / Dedicated Relic Tabs
+        // 2. Dedicated relic containers, where a numeric array really is
+        //    `relic id -> level`.
         for (const char* varName : {
-            "inventory", "bags", "inventory_relic_tab", "relics", "relic_array", "pRelics",
+            "inventory_relic_tab", "relics", "relic_array", "pRelics",
             "relic_tab", "relic_inventory", "relics_collected", "relic_levels", "relicPage"
         }) {
             if (YYTK::InstanceHasVariable(yytk, player, varName)) {
                 RValue val = YYTK::GetInstanceVariable(yytk, player, varName);
-                ScanContainerForRelics(yytk, val, relicMap, 0);
+                ScanContainerForRelics(yytk, val, relicMap, ContainerKind::RelicTable, 0);
             }
         }
     } catch (...) {}
@@ -154,13 +195,13 @@ inline std::unordered_map<int, int> GetOwnedRelicLevels(YYTKInterface* yytk, con
 }
 
 /**
- * Returns set of relic IDs that are at maximum level (>= 10).
+ * Returns set of relic IDs that are at maximum level (>= kMaxedRelicLevel).
  */
 inline std::unordered_set<int> GetMaxedRelicIds(YYTKInterface* yytk, const RValue& player) {
     std::unordered_set<int> maxed;
     auto relicMap = GetOwnedRelicLevels(yytk, player);
     for (const auto& [id, lvl] : relicMap) {
-        if (lvl >= 10) {
+        if (lvl >= kMaxedRelicLevel) {
             maxed.insert(id);
         }
     }
