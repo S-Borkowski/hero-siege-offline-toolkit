@@ -3,6 +3,7 @@
 #include <unordered_set>
 #include <unordered_map>
 #include <string>
+#include <string_view>
 #include "yytk_helpers.hpp"
 #include "objects.hpp"
 
@@ -37,6 +38,22 @@ inline bool ResolveLocalPlayer(YYTKInterface* yytk, RValue& outPlayer) {
     return false;
 }
 
+// ---------------------------------------------------------------------------
+// The relic-identification contract.
+//
+// These constants are the shared contract between this header and
+// scan_relic_levels() in the Python SDK, which must accept exactly the same
+// item layouts and container kinds. REPORTED 2026-09-12 by origin's second
+// review of PR #3: C++ recognised `cls` and read numeric arrays out of
+// `relic_levels` while Python did neither, so the two bindings disagreed about
+// which relics a player owns.
+//
+// They are deliberately enumerable rather than inline literals, so
+// tests/cpp/test_sdk_player_hooks.cpp can print them and
+// tests/test_cpp_sdk.py can assert the Python tuples match field for field. A
+// future edit to one side now fails a test instead of silently diverging.
+// ---------------------------------------------------------------------------
+
 /// Rarity tier that identifies an item as a relic (docs/RUNTIME_DATA_MODELS.md).
 inline constexpr int kRelicRarityTier = 16;
 /// Season 10 relic ids run 0..155; this is the exclusive upper bound used to
@@ -44,6 +61,28 @@ inline constexpr int kRelicRarityTier = 16;
 inline constexpr int kRelicIdLimit = 160;
 /// A relic at this level or above is maxed.
 inline constexpr int kMaxedRelicLevel = 10;
+/// Recursion budget, shared with the Python scanner.
+inline constexpr int kMaxScanDepth = 5;
+/// Longest array read from a single container, to bound a pathological table.
+inline constexpr int kMaxScannedArrayLength = 512;
+
+/// Fields holding the item/relic id.
+inline constexpr std::string_view kRelicIdFields[] = { "b", "relicId" };
+/// Fields whose value being kRelicRarityTier identifies a relic.
+inline constexpr std::string_view kRelicTierFields[] = { "c", "cls", "itemType" };
+/// Fields holding a relic's upgrade level. The highest present value wins.
+inline constexpr std::string_view kRelicLevelFields[] = { "o", "level", "relicLevel" };
+/// Relic-specific field whose mere presence identifies a relic.
+inline constexpr std::string_view kRelicOnlyField = "relicLevel";
+/// Player variables scanned as general containers: item structs only.
+inline constexpr std::string_view kGeneralContainerFields[] = {
+    "equippedItems", "inventory", "bags",
+};
+/// Player variables where a numeric array really is `relic id -> level`.
+inline constexpr std::string_view kRelicContainerFields[] = {
+    "inventory_relic_tab", "pRelics", "relic_array", "relic_inventory",
+    "relic_levels", "relic_tab", "relicPage", "relics", "relics_collected",
+};
 
 /**
  * What a container is, which decides how a bare number inside it is read.
@@ -89,7 +128,7 @@ inline void ScanContainerForRelics(
     ContainerKind kind = ContainerKind::General,
     int depth = 0
 ) {
-    if (!yytk || depth > 2) return;
+    if (!yytk || depth > kMaxScanDepth) return;
     try {
         if (container.m_Kind == ::YYTK::VALUE_OBJECT && container.m_Object) {
             // 1. If this is a slot container wrapping an inner 'data' struct:
@@ -103,14 +142,15 @@ inline void ScanContainerForRelics(
             int level = 0;
             bool isRelic = false;
 
-            if (YYTK::StructHasVariable(yytk, container, "b")) {
-                b = static_cast<int>(YYTK::GetStructVariable(yytk, container, "b").ToDouble());
-            } else if (YYTK::StructHasVariable(yytk, container, "relicId")) {
-                b = static_cast<int>(YYTK::GetStructVariable(yytk, container, "relicId").ToDouble());
+            for (const std::string_view idField : kRelicIdFields) {
+                if (YYTK::StructHasVariable(yytk, container, idField)) {
+                    b = static_cast<int>(YYTK::GetStructVariable(yytk, container, idField).ToDouble());
+                    break;
+                }
             }
 
             // Positive identification: the rarity tier says relic, ...
-            for (const char* tierField : { "c", "cls", "itemType" }) {
+            for (const std::string_view tierField : kRelicTierFields) {
                 if (YYTK::StructHasVariable(yytk, container, tierField)) {
                     const int tier = static_cast<int>(YYTK::GetStructVariable(yytk, container, tierField).ToDouble());
                     if (tier == kRelicRarityTier) {
@@ -120,12 +160,12 @@ inline void ScanContainerForRelics(
                 }
             }
             // ... or the item carries the relic-specific level field.
-            if (YYTK::StructHasVariable(yytk, container, "relicLevel")) {
+            if (YYTK::StructHasVariable(yytk, container, kRelicOnlyField)) {
                 isRelic = true;
             }
 
-            // Level comes only from the three documented relic level fields.
-            for (const char* lField : { "o", "level", "relicLevel" }) {
+            // Level comes only from the documented relic level fields, highest wins.
+            for (const std::string_view lField : kRelicLevelFields) {
                 if (YYTK::StructHasVariable(yytk, container, lField)) {
                     const int val = static_cast<int>(YYTK::GetStructVariable(yytk, container, lField).ToDouble());
                     if (val > level) level = val;
@@ -141,7 +181,7 @@ inline void ScanContainerForRelics(
         } else if (container.m_Kind == ::YYTK::VALUE_ARRAY) {
             int len = YYTK::GetArrayLength(yytk, container);
             // Cap array length to avoid pathological tables
-            if (len > 512) len = 512;
+            if (len > kMaxScannedArrayLength) len = kMaxScannedArrayLength;
             for (int i = 0; i < len; ++i) {
                 RValue child = YYTK::GetArrayElement(yytk, container, i);
                 if (child.m_Kind == ::YYTK::VALUE_REAL || child.m_Kind == ::YYTK::VALUE_INT32 || child.m_Kind == ::YYTK::VALUE_INT64) {
@@ -171,7 +211,7 @@ inline std::unordered_map<int, int> GetOwnedRelicLevels(YYTKInterface* yytk, con
     try {
         // 1. General containers: item structs only, each positively identified.
         //    A bare number in here is not a relic level.
-        for (const char* varName : { "equippedItems", "inventory", "bags" }) {
+        for (const std::string_view varName : kGeneralContainerFields) {
             if (YYTK::InstanceHasVariable(yytk, player, varName)) {
                 RValue val = YYTK::GetInstanceVariable(yytk, player, varName);
                 ScanContainerForRelics(yytk, val, relicMap, ContainerKind::General, 0);
@@ -180,10 +220,7 @@ inline std::unordered_map<int, int> GetOwnedRelicLevels(YYTKInterface* yytk, con
 
         // 2. Dedicated relic containers, where a numeric array really is
         //    `relic id -> level`.
-        for (const char* varName : {
-            "inventory_relic_tab", "relics", "relic_array", "pRelics",
-            "relic_tab", "relic_inventory", "relics_collected", "relic_levels", "relicPage"
-        }) {
+        for (const std::string_view varName : kRelicContainerFields) {
             if (YYTK::InstanceHasVariable(yytk, player, varName)) {
                 RValue val = YYTK::GetInstanceVariable(yytk, player, varName);
                 ScanContainerForRelics(yytk, val, relicMap, ContainerKind::RelicTable, 0);

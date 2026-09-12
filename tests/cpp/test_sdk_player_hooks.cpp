@@ -240,6 +240,95 @@ static void TestRelicIdentification() {
             RValue::Array({ RValue::Struct({ { "data", RealMaxedRelic() } }) });
         CHECK(GetMaxedRelicIds(&yytk, FakePlayer()).count(42) == 1);
     }
+
+    // 9. An id outside the plausible relic range is rejected even with tier 16.
+    {
+        ControlledYYTK yytk;
+        yytk.instanceFields["equippedItems"] = RValue::Array({
+            RValue::Struct({ { "b", RValue(500) }, { "c", RValue(16) }, { "o", RValue(10) } }),
+        });
+        CHECK(GetOwnedRelicLevels(&yytk, FakePlayer()).empty());
+    }
+
+    // 10. The highest of several level fields wins, not the first found.
+    {
+        ControlledYYTK yytk;
+        yytk.instanceFields["equippedItems"] = RValue::Array({
+            RValue::Struct({
+                { "b", RValue(42) }, { "c", RValue(16) },
+                { "o", RValue(3) }, { "level", RValue(10) },
+            }),
+        });
+        const auto owned = GetOwnedRelicLevels(&yytk, FakePlayer());
+        CHECK(owned.count(42) == 1);
+        if (owned.count(42)) CHECK_EQ(owned.at(42), 10);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The three cases from origin's second review, printed for the Python side of
+// tests/test_cpp_sdk.py to compare against scan_relic_levels() directly.
+// ---------------------------------------------------------------------------
+
+static void PrintOwned(const char* label, ControlledYYTK& yytk) {
+    const auto owned = HeroSiege::Player::GetOwnedRelicLevels(&yytk, FakePlayer());
+    std::printf("CASE %s", label);
+    // Deterministic order: the map is unordered.
+    for (int id = 0; id < HeroSiege::Player::kRelicIdLimit; ++id) {
+        auto it = owned.find(id);
+        if (it != owned.end()) std::printf(" %d=%d", it->first, it->second);
+    }
+    std::printf("\n");
+}
+
+static void TestCrossLanguageCases() {
+    {
+        ControlledYYTK yytk;
+        yytk.instanceFields["relic_levels"] = RValue::Array({ RValue(0), RValue(0), RValue(10) });
+        PrintOwned("relic_levels_numeric", yytk);
+    }
+    {
+        ControlledYYTK yytk;
+        yytk.instanceFields["inventory"] = RValue::Array({
+            RValue::Struct({ { "b", RValue(42) }, { "cls", RValue(16) }, { "o", RValue(10) } }),
+        });
+        PrintOwned("inventory_cls_item", yytk);
+    }
+    {
+        ControlledYYTK yytk;
+        yytk.instanceFields["inventory"] = RValue::Array({ RValue(0), RValue(0), RValue(10) });
+        PrintOwned("inventory_numeric_negative_control", yytk);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The identification contract, printed so tests/test_cpp_sdk.py can assert the
+// Python SDK declares exactly the same fields, limits and container names.
+// ---------------------------------------------------------------------------
+
+template <size_t N>
+static void PrintFields(const char* label, const std::string_view (&fields)[N]) {
+    std::printf("CONTRACT %s", label);
+    for (const std::string_view field : fields) {
+        std::printf(" %.*s", static_cast<int>(field.size()), field.data());
+    }
+    std::printf("\n");
+}
+
+static void PrintContract() {
+    using namespace HeroSiege::Player;
+    PrintFields("id_fields", kRelicIdFields);
+    PrintFields("tier_fields", kRelicTierFields);
+    PrintFields("level_fields", kRelicLevelFields);
+    PrintFields("general_containers", kGeneralContainerFields);
+    PrintFields("relic_containers", kRelicContainerFields);
+    std::printf("CONTRACT relic_only_field %.*s\n",
+                static_cast<int>(kRelicOnlyField.size()), kRelicOnlyField.data());
+    std::printf("CONTRACT rarity_tier %d\n", kRelicRarityTier);
+    std::printf("CONTRACT id_limit %d\n", kRelicIdLimit);
+    std::printf("CONTRACT maxed_level %d\n", kMaxedRelicLevel);
+    std::printf("CONTRACT max_scan_depth %d\n", kMaxScanDepth);
+    std::printf("CONTRACT max_array_length %d\n", kMaxScannedArrayLength);
 }
 
 // ---------------------------------------------------------------------------
@@ -448,6 +537,8 @@ static void TestHookInstaller() {
 
 int main() {
     TestRelicIdentification();
+    TestCrossLanguageCases();
+    PrintContract();
     TestHookInstaller();
 
     if (g_failures == 0) {

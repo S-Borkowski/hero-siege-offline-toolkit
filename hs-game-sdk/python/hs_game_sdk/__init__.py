@@ -44,7 +44,23 @@ from .structs import (
     CraftData,
     PlayerInstance,
 )
-from .player import EquipmentSlot, PlayerEquipment, scan_relic_levels
+from .player import (
+    EquipmentSlot,
+    PlayerEquipment,
+    scan_relic_levels,
+    maxed_relic_ids,
+    RELIC_RARITY_TIER,
+    RELIC_ID_LIMIT,
+    MAXED_RELIC_LEVEL,
+    MAX_SCAN_DEPTH,
+    MAX_SCANNED_ARRAY_LENGTH,
+    RELIC_ID_FIELDS,
+    RELIC_TIER_FIELDS,
+    RELIC_LEVEL_FIELDS,
+    RELIC_ONLY_FIELD,
+    GENERAL_CONTAINER_FIELDS,
+    RELIC_CONTAINER_FIELDS,
+)
 from .mod_registry import ModDefinition, ModRegistry, GLOBAL_MOD_REGISTRY
 
 __version__ = "1.1.0"
@@ -86,6 +102,18 @@ __all__ = [
     "EquipmentSlot",
     "PlayerEquipment",
     "scan_relic_levels",
+    "maxed_relic_ids",
+    "RELIC_RARITY_TIER",
+    "RELIC_ID_LIMIT",
+    "MAXED_RELIC_LEVEL",
+    "MAX_SCAN_DEPTH",
+    "MAX_SCANNED_ARRAY_LENGTH",
+    "RELIC_ID_FIELDS",
+    "RELIC_TIER_FIELDS",
+    "RELIC_LEVEL_FIELDS",
+    "RELIC_ONLY_FIELD",
+    "GENERAL_CONTAINER_FIELDS",
+    "RELIC_CONTAINER_FIELDS",
     "ModDefinition",
     "ModRegistry",
     "GLOBAL_MOD_REGISTRY",

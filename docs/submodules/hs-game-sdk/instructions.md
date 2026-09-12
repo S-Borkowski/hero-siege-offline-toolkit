@@ -250,8 +250,42 @@ Container shape matters too, via `Player::ContainerKind`:
 | `General` | `equippedItems`, `inventory`, `bags` | nothing - item structs only |
 | `RelicTable` | `relic_levels`, `relics`, `relic_tab`, `relic_array`, `pRelics`, `relic_inventory`, `relics_collected`, `inventory_relic_tab`, `relicPage` | `relic id -> level` |
 
-This matches `scan_relic_levels()` in the Python SDK; the two are tested against
-one shared fixture.
+#### The contract shared with the Python SDK
+
+Both scanners must accept exactly the same layouts. REPORTED 2026-09-12 by
+origin's second review of PR #3: C++ recognised `cls` and read numeric arrays out
+of `relic_levels` while Python did neither, so on identical input
+`{"relic_levels":[0,0,10]}` C++ said `{2:10}` and Python said `{}`. They now
+declare one contract, as enumerable constants on both sides:
+
+| Contract | Value | C++ | Python |
+| --- | --- | --- | --- |
+| Id fields | `b`, `relicId` | `kRelicIdFields` | `RELIC_ID_FIELDS` |
+| Rarity-tier fields (`== 16` means relic) | `c`, `cls`, `itemType` | `kRelicTierFields` | `RELIC_TIER_FIELDS` |
+| Level fields (highest present wins) | `o`, `level`, `relicLevel` | `kRelicLevelFields` | `RELIC_LEVEL_FIELDS` |
+| Relic-only field (presence means relic) | `relicLevel` | `kRelicOnlyField` | `RELIC_ONLY_FIELD` |
+| General containers | see table above | `kGeneralContainerFields` | `GENERAL_CONTAINER_FIELDS` |
+| Relic containers | see table above | `kRelicContainerFields` | `RELIC_CONTAINER_FIELDS` |
+| Plausible id range | `0 .. 159` | `kRelicIdLimit` | `RELIC_ID_LIMIT` |
+| Maxed at | `10` | `kMaxedRelicLevel` | `MAXED_RELIC_LEVEL` |
+| Recursion budget | `5` | `kMaxScanDepth` | `MAX_SCAN_DEPTH` |
+| Array read cap | `512` | `kMaxScannedArrayLength` | `MAX_SCANNED_ARRAY_LENGTH` |
+
+They are enumerable rather than inline literals for one reason: the C++ harness
+prints them and `tests/test_cpp_sdk.py` asserts the Python tuples match field for
+field, so editing one side without the other fails a test instead of drifting
+silently. The three reported cases are in that shared suite too, negative control
+included.
+
+**One difference is deliberate: how each side walks its input.** C++ reads named
+variables off a live `CInstance` and can only follow what it looks up - the `data`
+field and array elements - because YYToolkit gives it no way to enumerate a
+struct's keys. Python walks every key of a decoded save-file tree. So
+`{"inventory": {"bag1": [relic]}}` resolves in Python and has no C++ equivalent
+to resolve. The contract above is about *which layouts are recognised*; the
+traversal differs because the inputs do. There is no TypeScript scanner -
+`ts/src/player.ts` only carries `EquipmentSlot` - so the contract covers exactly
+these two implementations.
 
 ### `Hooks::InstallScriptHook` — both call routes, and safe to install twice
 

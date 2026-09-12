@@ -376,8 +376,18 @@ documented to hold it. The same applies to shape: a bare number is only a
 never in a general inventory.
 
 **When two language bindings answer the same question, test them against the same
-fixture.** The Python scanner was already correct while the C++ one was not, and
-nothing caught the divergence because only Python had tests.
-`tests/test_relic_identification.py` and `tests/cpp/test_sdk_player_hooks.cpp` are
-the paired halves, and `tests/test_cpp_sdk.py` asserts both produce the same
-result from the same input.
+fixture - and make the contract itself comparable.** The Python scanner was
+already correct while the C++ one was not, and nothing caught the divergence
+because only Python had tests. Adding one shared fixture was still not enough:
+origin's second review found the *opposite* gap on the same pair - C++ accepted
+`cls` and read numeric arrays out of `relic_levels`, Python did neither - because
+a single flat fixture cannot cover a contract. So the accepted fields, limits and
+container names are now declared as **enumerable constants in both bindings**
+(`kRelicTierFields` / `RELIC_TIER_FIELDS` and friends), the C++ test harness
+prints them, and `tests/test_cpp_sdk.py` asserts the two lists match field for
+field. Editing one side now fails a test rather than drifting.
+
+Where the two genuinely cannot match - C++ reads named variables off a live
+`CInstance` and cannot enumerate a struct's keys, Python walks a whole decoded
+save tree - say so in the docs and scope the parity claim to what is actually
+shared. Do not claim parity you have not tested.

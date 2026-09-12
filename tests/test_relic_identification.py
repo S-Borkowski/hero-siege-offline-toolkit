@@ -18,19 +18,19 @@ SDK_PY_PATH = Path(__file__).resolve().parents[1] / "hs-game-sdk" / "python"
 if str(SDK_PY_PATH) not in sys.path:
     sys.path.insert(0, str(SDK_PY_PATH))
 
-from hs_game_sdk import scan_relic_levels  # noqa: E402
+from hs_game_sdk import (  # noqa: E402
+    RELIC_CONTAINER_FIELDS,
+    RELIC_ID_LIMIT,
+    RELIC_TIER_FIELDS,
+    maxed_relic_ids,
+    scan_relic_levels,
+)
 
 # Rarity tier 16 identifies a relic (docs/RUNTIME_DATA_MODELS.md).
 ORDINARY_ITEM_WITH_LEVEL = {"b": 15, "c": 8, "level": 100}
 REAL_MAXED_RELIC = {"b": 42, "c": 16, "o": 10}
 STAR_UPGRADED_ORDINARY_ITEM = {"b": 7, "c": 6, "p": 12}
 STACKED_LOW_LEVEL_RELIC = {"b": 50, "c": 16, "o": 3, "count": 99}
-
-MAXED_RELIC_LEVEL = 10
-
-
-def maxed_relic_ids(container) -> set:
-    return {rid for rid, level in scan_relic_levels(container).items() if level >= MAXED_RELIC_LEVEL}
 
 
 class TestRelicIdentification(unittest.TestCase):
@@ -76,6 +76,61 @@ class TestRelicIdentification(unittest.TestCase):
             scan_relic_levels({"equippedItems": [{"data": REAL_MAXED_RELIC}]}),
             {42: 10},
         )
+
+
+class TestContractAlignedWithCpp(unittest.TestCase):
+    """The layouts origin's second review found C++ accepting and Python dropping.
+
+    tests/test_cpp_sdk.py runs the same three through the C++ scanner and asserts
+    both languages produce these results; these are the Python-only half, so the
+    cases still run when no compiler is available.
+    """
+
+    def test_numeric_array_in_a_recognised_relic_container(self):
+        self.assertEqual(scan_relic_levels({"relic_levels": [0, 0, 10]}), {2: 10})
+        self.assertEqual(maxed_relic_ids({"relic_levels": [0, 0, 10]}), {2})
+
+    def test_cls_identifies_a_relic(self):
+        self.assertEqual(
+            scan_relic_levels({"inventory": [{"b": 42, "cls": 16, "o": 10}]}),
+            {42: 10},
+        )
+
+    def test_numeric_array_in_a_general_container_stays_ignored(self):
+        """The negative control the review asked to keep."""
+        self.assertEqual(scan_relic_levels({"inventory": [0, 0, 10]}), {})
+        self.assertEqual(scan_relic_levels({"equippedItems": [0, 0, 10]}), {})
+        self.assertEqual(scan_relic_levels({"bags": [1, 2, 3]}), {})
+
+    def test_every_recognised_relic_container_reads_numeric_arrays(self):
+        for field in RELIC_CONTAINER_FIELDS:
+            with self.subTest(container=field):
+                self.assertEqual(scan_relic_levels({field: [0, 0, 10]}), {2: 10})
+
+    def test_every_tier_field_identifies_a_relic(self):
+        for field in RELIC_TIER_FIELDS:
+            with self.subTest(tier_field=field):
+                self.assertEqual(scan_relic_levels({"bag": [{"b": 5, field: 16}]}), {5: 1})
+
+    def test_zero_levels_in_a_relic_table_are_not_owned(self):
+        self.assertEqual(scan_relic_levels({"relic_levels": [0, 0, 0]}), {})
+
+    def test_id_outside_the_plausible_range_is_rejected(self):
+        self.assertEqual(scan_relic_levels({"bag": [{"b": RELIC_ID_LIMIT, "c": 16, "o": 10}]}), {})
+        self.assertEqual(scan_relic_levels({"bag": [{"b": -1, "c": 16, "o": 10}]}), {})
+
+    def test_highest_level_field_wins_not_the_first_found(self):
+        self.assertEqual(
+            scan_relic_levels({"bag": [{"b": 42, "c": 16, "o": 3, "level": 10}]}),
+            {42: 10},
+        )
+
+    def test_non_numeric_values_do_not_raise(self):
+        container = {
+            "relic_levels": ["not a number", None, 10, True],
+            "inventory": [{"b": "x", "c": 16}, {"b": 3, "c": "16"}],
+        }
+        self.assertEqual(scan_relic_levels(container), {2: 10})
 
 
 if __name__ == "__main__":

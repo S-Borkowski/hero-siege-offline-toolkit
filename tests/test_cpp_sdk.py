@@ -23,7 +23,20 @@ SDK_PY_PATH = ROOT / "hs-game-sdk" / "python"
 if str(SDK_PY_PATH) not in sys.path:
     sys.path.insert(0, str(SDK_PY_PATH))
 
-from hs_game_sdk import scan_relic_levels  # noqa: E402
+from hs_game_sdk import (  # noqa: E402
+    GENERAL_CONTAINER_FIELDS,
+    MAX_SCAN_DEPTH,
+    MAX_SCANNED_ARRAY_LENGTH,
+    MAXED_RELIC_LEVEL,
+    RELIC_CONTAINER_FIELDS,
+    RELIC_ID_FIELDS,
+    RELIC_ID_LIMIT,
+    RELIC_LEVEL_FIELDS,
+    RELIC_ONLY_FIELD,
+    RELIC_RARITY_TIER,
+    RELIC_TIER_FIELDS,
+    scan_relic_levels,
+)
 
 CPP_DIR = ROOT / "tests" / "cpp"
 SOURCE = CPP_DIR / "test_sdk_player_hooks.cpp"
@@ -37,6 +50,16 @@ PARITY_FIXTURE = {
         {"b": 15, "c": 8, "level": 100},
         {"b": 42, "c": 16, "o": 10},
     ]
+}
+
+# The three layouts from origin's second review of PR #3, where C++ accepted
+# records Python dropped. Each is passed to the C++ scanner by the harness under
+# the matching `CASE` label and to scan_relic_levels() here, and both must agree.
+# The negative control stays: numbers in a general container mean nothing.
+CROSS_LANGUAGE_CASES = {
+    "relic_levels_numeric": ({"relic_levels": [0, 0, 10]}, {2: 10}),
+    "inventory_cls_item": ({"inventory": [{"b": 42, "cls": 16, "o": 10}]}, {42: 10}),
+    "inventory_numeric_negative_control": ({"inventory": [0, 0, 10]}, {}),
 }
 
 
@@ -149,6 +172,56 @@ class TestCppSdkBehaviour(unittest.TestCase):
         self.assertTrue(cpp, f"harness printed no parity lines:\n{self.output}")
         self.assertEqual(cpp, scan_relic_levels(PARITY_FIXTURE))
         self.assertEqual(cpp, {42: 10})
+
+    def _case_result(self, label: str) -> dict:
+        match = re.search(rf"^CASE {re.escape(label)}(.*)$", self.output, re.MULTILINE)
+        self.assertIsNotNone(match, f"harness printed no CASE {label}:\n{self.output}")
+        return {
+            int(pair.split("=")[0]): int(pair.split("=")[1])
+            for pair in match.group(1).split()
+        }
+
+    def test_cross_language_cases_agree(self):
+        """The layouts origin's second review found C++ accepting and Python dropping."""
+        for label, (fixture, expected) in CROSS_LANGUAGE_CASES.items():
+            with self.subTest(case=label):
+                cpp = self._case_result(label)
+                python = scan_relic_levels(fixture)
+                self.assertEqual(cpp, expected, f"C++ changed for {label}")
+                self.assertEqual(python, expected, f"Python changed for {label}")
+                self.assertEqual(cpp, python, f"{label}: C++ {cpp} vs Python {python}")
+
+    def _contract_fields(self, label: str) -> list:
+        match = re.search(rf"^CONTRACT {re.escape(label)}(.*)$", self.output, re.MULTILINE)
+        self.assertIsNotNone(match, f"harness printed no CONTRACT {label}:\n{self.output}")
+        return match.group(1).split()
+
+    def test_identification_contract_matches_between_bindings(self):
+        """Guards against the two scanners drifting apart again.
+
+        The C++ header declares these as enumerable constants purely so the
+        harness can print them and this test can compare them field for field.
+        """
+        for label, python_value in [
+            ("id_fields", RELIC_ID_FIELDS),
+            ("tier_fields", RELIC_TIER_FIELDS),
+            ("level_fields", RELIC_LEVEL_FIELDS),
+            ("general_containers", GENERAL_CONTAINER_FIELDS),
+            ("relic_containers", RELIC_CONTAINER_FIELDS),
+        ]:
+            with self.subTest(contract=label):
+                self.assertEqual(self._contract_fields(label), list(python_value))
+
+        for label, python_value in [
+            ("relic_only_field", RELIC_ONLY_FIELD),
+            ("rarity_tier", str(RELIC_RARITY_TIER)),
+            ("id_limit", str(RELIC_ID_LIMIT)),
+            ("maxed_level", str(MAXED_RELIC_LEVEL)),
+            ("max_scan_depth", str(MAX_SCAN_DEPTH)),
+            ("max_array_length", str(MAX_SCANNED_ARRAY_LENGTH)),
+        ]:
+            with self.subTest(contract=label):
+                self.assertEqual(self._contract_fields(label), [str(python_value)])
 
 
 if __name__ == "__main__":
