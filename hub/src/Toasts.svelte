@@ -22,8 +22,9 @@
   <div class="dock" class:inset role="log" aria-live="polite" aria-relevant="additions">
     {#if notices.length > 1}
       <div class="head">
-        <span>{notices.length} problems</span>
-        <button class="clear" type="button" onclick={dismissAllNotices}>Dismiss all</button>
+        <button class="clear" type="button" onclick={dismissAllNotices}>
+          Dismiss all {notices.length}
+        </button>
       </div>
     {/if}
     {#each notices as notice (notice.id)}
@@ -41,6 +42,9 @@
 {/if}
 
 <style>
+  /* Laid over the content area rather than displacing it. An earlier version
+     gave this a background and a bottom border, which made it read as a second
+     piece of window chrome appearing and disappearing. */
   .dock {
     position: fixed;
     /* Below the title bar, which is the one thing that must stay reachable --
@@ -50,30 +54,24 @@
     right: 0;
     z-index: 50;
     display: grid;
-    gap: 6px;
-    padding: 10px 22px;
-    /* Opaque, because content scrolls underneath. */
-    background: var(--ground-3);
-    border-bottom: 1px solid var(--edge-4);
-    box-shadow: 0 8px 22px rgb(0 0 0 / 0.4);
+    gap: 8px;
+    padding: 14px 22px 0;
     /* Never more than half the window; the rest scrolls. */
     max-height: 50vh;
     overflow-y: auto;
+    /* The dock spans the section but is mostly empty. Without this it would
+       swallow every click on the cards it floats over. */
+    pointer-events: none;
     animation: drop 160ms ease-out;
   }
   /* The first-run and loading screens have no sidebar to clear. */
   .dock.inset { left: var(--sidebar-w, 168px); }
 
-  .head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    font-size: 10.5px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--bone-3);
-  }
+  /* Only the parts that are actually drawn take the clicks back. */
+  .head,
+  .toast { pointer-events: auto; }
+
+  .head { display: flex; justify-content: flex-end; }
 
   .toast {
     display: flex;
@@ -83,6 +81,8 @@
     border-radius: 9px;
     border: 1px solid var(--edge-4);
     background: var(--ground-6);
+    /* Opaque and lifted, because the grid scrolls underneath it. */
+    box-shadow: 0 10px 26px rgb(0 0 0 / 0.5);
     font-size: 12.5px;
     color: var(--bone-11);
   }
