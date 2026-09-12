@@ -378,6 +378,24 @@ mod tests {
     }
 
     #[test]
+    fn the_embedded_catalog_has_not_been_line_ending_converted() {
+        // The signature covers the file's exact bytes. `core.autocrlf` is on by
+        // default on Windows, including GitHub's windows runners, so a fresh
+        // clone there rewrote catalog.json with CRLF and produced a catalog the
+        // hub refuses -- and the symptom was fourteen signature failures that
+        // named everything except the cause. `.gitattributes` marks these files
+        // `-text`; this is the assertion that says so if that ever stops
+        // working, in one line instead of fourteen.
+        // Compared as a byte so there is no escape sequence in this source
+        // for a line-ending conversion to eat -- which is how the first
+        // attempt at this test broke.
+        assert!(
+            !EMBEDDED_CATALOG.as_bytes().contains(&b'\r'),
+            "catalog.json contains CR: it has been line-ending converted, so its \n             signature can no longer verify. Check that .gitattributes still marks \n             catalog/catalog.json as -text."
+        );
+    }
+
+    #[test]
     fn the_embedded_catalog_parses_and_verifies() {
         let loaded = loaded();
         assert_eq!(loaded.source, Source::Embedded);
