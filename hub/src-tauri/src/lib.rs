@@ -152,7 +152,7 @@ fn build_view(hub: &Hub) -> Result<LibraryView, String> {
                 .map(|i| version::is_newer(&tool.version, &i.version))
                 .unwrap_or(false),
             running_pid: pid,
-            running_elsewhere: pid.is_none() && launch::any_port_in_use(&tool.launch.ports),
+            running_elsewhere: pid.is_none() && launch::already_running(tool),
             staged: hub_state.staged.get(&tool.id).cloned(),
             source_available,
             tool: tool.clone(),
