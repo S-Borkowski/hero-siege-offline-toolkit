@@ -10,6 +10,7 @@ pub mod install;
 pub mod launch;
 pub mod log;
 pub mod paths;
+pub mod procs;
 pub mod state;
 pub mod verify;
 pub mod version;
@@ -143,12 +144,41 @@ fn build_view(hub: &Hub) -> Result<LibraryView, String> {
         .lock()
         .map_err(|_| "the process table is busy".to_string())?
         .clone();
-    let game = game::status();
+    // One look at the process table for the whole view. It answers three
+    // questions that used to be asked separately -- the game's state, whether
+    // each tracked PID is alive, and whether a tool is running that this hub
+    // never started -- and answering them from one snapshot means they cannot
+    // contradict each other.
+    let snapshot = procs::Snapshot::take();
+    let game = game::status_from(&snapshot);
 
     let mut tools = Vec::with_capacity(loaded.catalog.tools.len());
     for tool in &loaded.catalog.tools {
         let installed = hub_state.installed.get(&tool.id);
-        let pid = running.get(&tool.id).copied().filter(|pid| launch::is_alive(*pid));
+
+        let tracked = running
+            .get(&tool.id)
+            .copied()
+            .filter(|pid| snapshot.is_alive(*pid));
+
+        // `Hub.running` is in memory, so a restart loses every tracked PID. A
+        // process whose executable lives inside this tool's install directory
+        // is this tool, whatever it is called -- which is the only signal that
+        // works for the four tools with no health endpoint and no declared
+        // port. Before this they went invisible on restart and their cards
+        // offered Launch for something already open.
+        let found = match (tracked, installed) {
+            (None, Some(installed)) => {
+                snapshot.find_under(std::path::Path::new(&installed.path))
+            }
+            _ => None,
+        };
+        let pid = tracked.or(found);
+
+        // Only reached when the process table knew nothing, because an HTTP
+        // probe is the expensive answer and the weaker one.
+        let answering = pid.is_none() && launch::already_running(tool);
+
         let source_available = tool.source_launch.is_some()
             && hub
                 .repo_root
@@ -167,7 +197,10 @@ fn build_view(hub: &Hub) -> Result<LibraryView, String> {
                 .unwrap_or(false),
             running_pid: pid,
             can_stop: pid.is_some() && launch::can_stop(tool.launch.elevate, hub.elevated),
-            running_elsewhere: pid.is_none() && launch::already_running(tool),
+            // Up, but not started by this hub. Found by path it still has a
+            // PID and so can still be stopped; known only by its health
+            // endpoint it does not.
+            running_elsewhere: tracked.is_none() && (found.is_some() || answering),
             staged: hub_state.staged.get(&tool.id).cloned(),
             source_available,
             guide_url: catalog::guide_url(&tool.guide),
@@ -448,12 +481,28 @@ fn launch_tool(
 
 #[tauri::command]
 fn stop_tool(app: AppHandle, hub: State<'_, Arc<Hub>>, id: String) -> Result<(), String> {
-    let pid = hub
+    let tracked = hub
         .running
         .lock()
         .map_err(|_| "the process table is busy".to_string())?
         .get(&id)
         .copied();
+
+    // The view offers Stop for a tool found by its install path as well as one
+    // this hub launched, so this has to be able to stop both -- otherwise the
+    // button is the same lie as a Launch offered for something already open.
+    let pid = match tracked {
+        Some(pid) => Some(pid),
+        None => hub
+            .state
+            .lock()
+            .ok()
+            .and_then(|state| state.installed.get(&id).map(|i| i.path.clone()))
+            .and_then(|path| {
+                procs::Snapshot::take().find_under(std::path::Path::new(&path))
+            }),
+    };
+
     if let Some(pid) = pid {
         launch::stop(pid).map_err(|e| e.to_string())?;
         if let Ok(mut running) = hub.running.lock() {

@@ -25,6 +25,7 @@ falorfrozen-cmd/<tool>  ──release──►  GitHub Releases (unchanged, ten 
     ├─ install.rs   download → hash → extract → versioned dir → activate → roll back
     ├─ launch.rs    spawn (elevated when declared) → health probe → track the PID
     ├─ game.rs      is Hero Siege up, is EAC up
+    ├─ procs.rs     one process-table snapshot, and the questions asked of it
     ├─ state.rs     installed set, settings, staged installs
     └─ lib.rs       the Tauri commands, and the worker threads they start
 ```
@@ -140,9 +141,32 @@ unauthenticated probe with 401 — and "something is listening" is the only
 question being asked. Tools with no HTTP surface fall back to "the process is
 still alive", which is all a Tkinter app can offer.
 
-**Running outside the hub.** If one of a tool's declared ports is already
-answering, the card says *Running (outside the hub)* rather than offering Launch
-and then failing on the tool's own single-instance lock.
+**Noticing a tool the hub did not start.** `Hub.running` is in memory, so every
+tracked PID is lost when the hub restarts. Three signals are tried, strongest
+first, all from the one process-table snapshot `build_view` already takes:
+
+1. **A tracked PID that is still alive** — this hub started it.
+2. **A process whose executable lies inside the tool's install directory**
+   ([`procs::is_under`](../../hub/src-tauri/src/procs.rs)). That process *is*
+   that tool, whatever it is called and whoever started it, so the hub has a PID
+   it can still stop. This is the only signal that works for `hssaveeditor`,
+   `hs-value-editor`, `hs-offline-loot-forge` and `hs-stat-forge`, which declare
+   no health endpoint and no ports — before it, they went invisible on restart
+   and their cards offered Launch for something already open, which for the
+   single-instance ones then failed.
+3. **The health endpoint answering** — something is up but it is not the copy the
+   hub installed, so there is no PID to act on. The card says so and offers
+   nothing.
+
+The match is case-insensitive because Windows paths are, and it checks a path
+*component* boundary so `…\forgepact\1.3.16` cannot match a process under
+`…\forgepact\1.3.160`.
+
+Signals 1 and 2 both yield a PID, and 2 sets *Running (outside the hub)* as
+well — the hub can stop it, and should still say it was not the one that started
+it. `stop_tool` re-detects by install path for exactly that case: offering Stop
+for a PID the hub had not recorded would be the same lie as offering Launch for
+something already running.
 
 ---
 

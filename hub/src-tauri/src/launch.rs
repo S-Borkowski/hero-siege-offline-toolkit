@@ -285,43 +285,16 @@ fn open_document(path: &Path) -> Result<()> {
 // Liveness
 // ---------------------------------------------------------------------------
 
+/// Is this PID still around?
+///
+/// Takes its own snapshot, so it is the right call from a command handler and
+/// the wrong one inside `build_view` -- that has a `procs::Snapshot` already and
+/// should ask it instead of enumerating again per tool.
 pub fn is_alive(pid: u32) -> bool {
     let mut system = sysinfo::System::new();
     let pid = sysinfo::Pid::from_u32(pid);
     system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), true);
     system.process(pid).is_some()
-}
-
-/// Depth-first walk of a process tree, children before parents.
-///
-/// Split out from `stop` so the ordering and the cycle guard are testable
-/// without spawning anything. `edges` is (pid, parent pid).
-fn tree_order(edges: &[(u32, Option<u32>)], root: u32) -> Vec<u32> {
-    let mut children: std::collections::HashMap<u32, Vec<u32>> =
-        std::collections::HashMap::new();
-    for (pid, parent) in edges {
-        if let Some(parent) = parent {
-            children.entry(*parent).or_default().push(*pid);
-        }
-    }
-    // A parent reported as its own ancestor would loop forever. It should not
-    // happen; `seen` means it cannot.
-    let mut seen = std::collections::HashSet::new();
-    let mut order = Vec::new();
-    let mut stack = vec![root];
-    while let Some(pid) = stack.pop() {
-        if !seen.insert(pid) {
-            continue;
-        }
-        order.push(pid);
-        if let Some(kids) = children.get(&pid) {
-            stack.extend(kids.iter().copied());
-        }
-    }
-    // Pre-order visits a parent before its children; reversed, children die
-    // first, so a parent cannot outlive the kill and respawn one.
-    order.reverse();
-    order
 }
 
 /// Stop a tool, and everything it started.
@@ -337,25 +310,21 @@ fn tree_order(edges: &[(u32, Option<u32>)], root: u32) -> Vec<u32> {
 /// its child, pid 15952. Stop reported success, the window stayed open, and the
 /// port kept answering.
 pub fn stop(pid: u32) -> Result<()> {
+    // One enumeration for the whole operation. The children are not known in
+    // advance, and deciding the tree from one snapshot while killing from
+    // another leaves a window where a PID is reused and the kill lands on
+    // something unrelated -- so the `System` that answers the tree is the same
+    // one that supplies the handles to kill.
     let mut system = sysinfo::System::new();
-    // The whole table, because the children are not known in advance -- and one
-    // snapshot rather than several, so the tree cannot change underneath the
-    // walk and lead to killing something unrelated that reused a PID.
     system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+    let snapshot = crate::procs::Snapshot::from_system(&system);
 
-    let root = sysinfo::Pid::from_u32(pid);
-    if system.process(root).is_none() {
+    if !snapshot.is_alive(pid) {
         // Already gone. The caller wanted it stopped; it is stopped.
         return Ok(());
     }
 
-    let edges: Vec<(u32, Option<u32>)> = system
-        .processes()
-        .iter()
-        .map(|(pid, process)| (pid.as_u32(), process.parent().map(|p| p.as_u32())))
-        .collect();
-
-    for victim in tree_order(&edges, pid) {
+    for victim in snapshot.tree_order(pid) {
         if let Some(process) = system.process(sysinfo::Pid::from_u32(victim)) {
             process.kill();
         }
@@ -365,8 +334,7 @@ pub fn stop(pid: u32) -> Result<()> {
     // parent is usually one that was already exiting.
     if is_alive(pid) {
         return Err(LaunchError::Io(format!(
-            "process {pid} would not stop. If it is running elevated, close it \
-             from its own window."
+            "process {pid} would not stop. If it is running elevated, close it              from its own window."
         )));
     }
     Ok(())
@@ -521,44 +489,8 @@ mod tests {
         assert!(stop(0xFFFF_FFF0).is_ok());
     }
 
-    #[test]
-    fn a_process_tree_is_killed_children_first() {
-        // 100 -> 200 -> 400, and 100 -> 300. A PyInstaller bootloader is the
-        // 100 -> 200 edge, and killing 100 alone is what left ForgePact
-        // running with its window open and its port still answering.
-        let edges = [
-            (1u32, None),
-            (100, Some(1)),
-            (200, Some(100)),
-            (300, Some(100)),
-            (400, Some(200)),
-            (999, Some(1)),
-        ];
-        let order = tree_order(&edges, 100);
 
-        assert_eq!(order.len(), 4, "{order:?}");
-        assert!(!order.contains(&1), "walked up to the parent: {order:?}");
-        assert!(!order.contains(&999), "picked up an unrelated process: {order:?}");
 
-        let at = |pid: u32| order.iter().position(|p| *p == pid).unwrap();
-        assert!(at(400) < at(200), "grandchild must die before its parent");
-        assert!(at(200) < at(100), "child must die before its parent");
-        assert!(at(300) < at(100), "child must die before its parent");
-    }
-
-    #[test]
-    fn a_leaf_process_is_its_own_whole_tree() {
-        assert_eq!(tree_order(&[(5, Some(1))], 5), vec![5]);
-    }
-
-    #[test]
-    fn a_parent_cycle_does_not_hang_the_walk() {
-        // Not something Windows reports, but an infinite loop here would take
-        // the hub down rather than fail a stop.
-        let edges = [(10u32, Some(20)), (20, Some(10))];
-        let order = tree_order(&edges, 10);
-        assert_eq!(order.len(), 2);
-    }
 
     #[test]
     fn an_unrelated_listener_on_a_fallback_port_is_not_the_tool() {
