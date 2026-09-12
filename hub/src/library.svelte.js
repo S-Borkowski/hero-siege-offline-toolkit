@@ -8,8 +8,23 @@ import { invoke, listen } from './bridge.js';
 
 let view = $state(null);
 let loading = $state(true);
-let error = $state('');
 let checking = $state(false);
+
+/**
+ * Things that went wrong, shown as toasts until dismissed.
+ *
+ * This was a single `error` string on a banner at the top of the scrolling
+ * content, and it was wrong twice over. The banner sat above the tool grid, so
+ * an error raised by the eighth card appeared somewhere the reader had scrolled
+ * past -- and `refresh`, which runs on a ten-second poll, cleared it on success,
+ * so anything not read within ten seconds was gone. An error nobody can see is
+ * the same as no error at all.
+ *
+ * So: viewport-anchored, and it stays until someone closes it. Only an action
+ * the user took clears anything, and only its own entry.
+ */
+let notices = $state([]);
+let nextNoticeId = 1;
 /** Tool id -> the most recent install-progress event for it. */
 let progress = $state({});
 let health = $state({});
@@ -31,7 +46,37 @@ export function settings() {
 }
 
 export function status() {
-  return { loading, error, checking };
+  return { loading, checking };
+}
+
+export function allNotices() {
+  return notices;
+}
+
+/**
+ * Add a notice, or bring an existing identical one forward.
+ *
+ * The dedupe matters because `refresh` polls: a backend that has stopped
+ * answering would otherwise stack six copies of the same sentence a minute.
+ */
+export function notify(kind, text) {
+  const message = String(text ?? '').trim();
+  if (!message) return;
+  const existing = notices.find((n) => n.text === message && n.kind === kind);
+  if (existing) {
+    existing.count += 1;
+    existing.at = Date.now();
+    return;
+  }
+  notices = [...notices, { id: nextNoticeId++, kind, text: message, at: Date.now(), count: 1 }];
+}
+
+export function dismissNotice(id) {
+  notices = notices.filter((n) => n.id !== id);
+}
+
+export function dismissAllNotices() {
+  notices = [];
 }
 
 export function progressFor(id) {
@@ -62,9 +107,8 @@ export function busy() {
 export async function refresh() {
   try {
     view = await invoke('library');
-    error = '';
   } catch (e) {
-    error = String(e?.message ?? e);
+    notify('error', e?.message ?? e);
   } finally {
     loading = false;
   }
@@ -72,11 +116,10 @@ export async function refresh() {
 
 export async function checkForUpdates() {
   checking = true;
-  error = '';
   try {
     view = await invoke('check_for_updates');
   } catch (e) {
-    error = String(e?.message ?? e);
+    notify('error', e?.message ?? e);
   } finally {
     checking = false;
   }
@@ -86,9 +129,8 @@ export async function saveSettings(next) {
   try {
     await invoke('set_settings', { settings: next });
     await refresh();
-    error = '';
   } catch (e) {
-    error = String(e?.message ?? e);
+    notify('error', e?.message ?? e);
   }
 }
 
@@ -102,18 +144,15 @@ export async function saveSettings(next) {
 export async function act(command, args) {
   try {
     const result = await invoke(command, args);
-    error = '';
     if (command !== 'install_tool') await refresh();
     return result;
   } catch (e) {
-    error = String(e?.message ?? e);
+    notify('error', e?.message ?? e);
     throw e;
   }
 }
 
-export function dismissError() {
-  error = '';
-}
+
 
 /** Subscribe to the backend's events. Called once, from App. */
 export function connect() {
@@ -127,6 +166,11 @@ export function connect() {
     const payload = e.payload;
     if (!payload?.id) return;
     progress = { ...progress, [payload.id]: payload };
+    if (payload.phase === 'failed') {
+      // This happened on a worker thread, long after the click returned, so
+      // there is no rejected promise anywhere for it to surface through.
+      notify('error', `${payload.id}: ${payload.error}`);
+    }
     if (payload.phase === 'done') {
       // Leave the finished row up briefly so the drawer does not blink an
       // install out of existence the instant it lands.

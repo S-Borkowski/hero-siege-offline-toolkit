@@ -34,7 +34,7 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    height: 42px;
+    height: var(--titlebar-h, 42px);
     padding: 0 6px 0 12px;
     background: linear-gradient(var(--ground-6), var(--ground-3));
     border-bottom: 1px solid var(--edge-2);

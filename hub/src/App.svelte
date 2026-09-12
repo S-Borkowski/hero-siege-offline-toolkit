@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { art } from './skin.svelte.js';
   import {
-    connect, refresh, library, status, updates, staged, busy, dismissError,
+    connect, refresh, library, status, updates, staged, busy,
   } from './library.svelte.js';
   import TitleBar from './TitleBar.svelte';
   import Library from './Library.svelte';
@@ -14,6 +14,7 @@
   import FirstRun from './FirstRun.svelte';
   import Downloads from './Downloads.svelte';
   import StatusBar from './StatusBar.svelte';
+  import Toasts from './Toasts.svelte';
 
   let route = $state('library');
   let openTool = $state(null);
@@ -98,13 +99,6 @@
       </nav>
 
       <main>
-        {#if state.error}
-          <div class="banner" role="alert">
-            <p>{state.error}</p>
-            <button type="button" onclick={dismissError} aria-label="Dismiss">×</button>
-          </div>
-        {/if}
-
         {#if openTool}
           <ToolDetail id={openTool.id} action={openTool.action} onback={() => (openTool = null)} />
         {:else if route === 'library'}
@@ -127,10 +121,20 @@
 
     <StatusBar onshow={show} />
   {/if}
+
+  <!-- Outside `main`, so a message is not parked wherever the reader happens
+       to have scrolled to. Rendered in every state, including first run, so no
+       failure path is left without a way to say so. -->
+  <Toasts inset={!state.loading && !needsFirstRun} />
 </div>
 
 <style>
   .shell {
+    /* The docked notice bar has to clear both of these, and TitleBar and the
+       sidebar read them too, so they are declared once here rather than
+       repeated as literals in three components. */
+    --titlebar-h: 42px;
+    --sidebar-w: 168px;
     display: flex;
     flex-direction: column;
     height: 100vh;
@@ -141,7 +145,7 @@
   .body { flex: 1; display: flex; min-height: 0; }
 
   .sidebar {
-    width: 168px;
+    width: var(--sidebar-w);
     flex: 0 0 auto;
     display: flex;
     flex-direction: column;
@@ -189,25 +193,4 @@
   main { flex: 1; min-width: 0; overflow: auto; padding: 18px 22px 22px; }
   .centred { display: grid; place-items: center; color: var(--bone-5); }
 
-  .banner {
-    display: flex;
-    align-items: flex-start;
-    gap: 12px;
-    margin-bottom: 16px;
-    padding: 10px 12px;
-    border-radius: 10px;
-    border: 1px solid color-mix(in srgb, var(--rar-satanic) 50%, var(--edge-3));
-    background: color-mix(in srgb, var(--rar-satanic) 12%, var(--ground-4));
-    color: var(--bone-11);
-    font-size: 12.5px;
-  }
-  .banner p { margin: 0; flex: 1; }
-  .banner button {
-    background: none;
-    border: none;
-    color: var(--bone-7);
-    font-size: 17px;
-    line-height: 1;
-    cursor: pointer;
-  }
 </style>
