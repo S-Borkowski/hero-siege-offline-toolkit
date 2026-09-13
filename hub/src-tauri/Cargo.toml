@@ -36,6 +36,11 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 minisign-verify = "0.2"
 ureq = { version = "2", features = ["tls"] }
 sysinfo = "0.33"
+# Development only. Registered under `cfg(debug_assertions)` in `run()`, so a
+# release build never starts it -- it listens on a socket and can invoke any
+# command in this app, which is exactly what makes it useful for driving the
+# hub from a test harness and exactly why it must not ship.
+tauri-plugin-mcp-bridge = "0.13"
 
 [target.'cfg(windows)'.dependencies]
 # ShellExecuteExW with the `runas` verb: the hub stays non-elevated and asks

@@ -1042,7 +1042,26 @@ pub fn run() {
         log: logger,
     });
 
-    tauri::Builder::default()
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default();
+
+    // A bridge an agent can drive the running hub through: click the tabs, read
+    // the view, check the window is still taking input. That is how the
+    // responsiveness work was checked, because the defect it fixes is invisible
+    // to a test -- it is the window not repainting, not a wrong answer.
+    //
+    // Debug builds only, and bound to loopback rather than the plugin's default
+    // of every interface: it can invoke any command this app has.
+    #[cfg(debug_assertions)]
+    {
+        builder = builder.plugin(
+            tauri_plugin_mcp_bridge::Builder::new()
+                .bind_address("127.0.0.1")
+                .build(),
+        );
+    }
+
+    builder
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             // A second launch raises the window already open rather than racing
             // it for state.json.
@@ -1057,6 +1076,19 @@ pub fn run() {
         .manage(Arc::clone(&hub))
         .setup(move |app| {
             let handle = app.handle().clone();
+            // The bridge drives the window by invoking its own plugin commands
+            // from the webview, so the window needs permission to make those
+            // calls. Added here rather than in `capabilities/`, which every
+            // build reads -- this way the released hub's capability set is
+            // exactly what it was.
+            #[cfg(debug_assertions)]
+            {
+                if let Err(error) = handle.add_capability(
+                    r#"{"identifier":"mcp-bridge-dev","windows":["hub"],"permissions":["mcp-bridge:default"]}"#,
+                ) {
+                    eprintln!("the MCP bridge capability could not be added: {error}");
+                }
+            }
             // The poll that used to live in `App.svelte`, moved to where the
             // data is: it announces only when something it watches has moved,
             // so an idle hub costs one process snapshot a tick and no IPC.
