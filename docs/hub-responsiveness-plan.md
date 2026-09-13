@@ -268,9 +268,20 @@ from Launch to Running: three `library-changed` events arrived carrying the new 
 command's own `announce`, the health-wait thread's, and the ticker's. Nothing the interface
 did produced any of them.
 
-### Still owed
+### The UAC prompt
 
-**The UAC prompt.** `launch_tool` raises one through `ShellExecuteExW` with the `runas`
-verb for the three elevated tools, and Stage 1 moved that call to a threadpool thread. It
-has not been triggered since. It needs a person at the machine to answer the prompt, so it
-is the one line of this that is signed off by a human or not at all.
+The one change here that could not be reasoned about: `launch_tool` raises a prompt
+through `ShellExecuteExW` with the `runas` verb for the three elevated tools, and Stage 1
+moved that call to a threadpool thread. Triggered for real on HS Value Scanner, with a
+person at the machine to answer it.
+
+It behaved, and it turned out to be the best argument for the whole change. The prompt
+appeared, `launch_tool` sat blocked on it for **6612 ms**, and the tool started on Yes
+(pid 267880, `can_stop: false`, as it should be -- an unelevated hub cannot terminate a
+high-integrity process). While the prompt was up, **43** `hub_info` round trips came back
+with a median of **2 ms** and a worst case of 3 ms.
+
+Before Stage 1 that is six and a half seconds of completely dead window, every single
+time anyone launched one of the three tools that need Administrator -- on a click that
+was about to raise a system modal, which is exactly when a frozen window reads as a
+crash.
