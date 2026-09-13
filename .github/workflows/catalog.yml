@@ -1,21 +1,35 @@
-# Regenerate catalog.json when a tool publishes a release.
+# Regenerate catalog.json when a tool repository signals that something moved.
 name: Catalog
 
 on:
-  # Fired by a tool repository's own release workflow. See
-  # .github/workflow-templates/notify-hub.example.yml for the sending half.
+  # Two dispatch types rebuild the catalog:
+  #
+  #   release-published  A tool published a release. This is the event that
+  #                      actually changes the catalog, since the catalog is
+  #                      built from each tool's latest *release*. Sent by
+  #                      .github/workflow-templates/notify-hub-release.example.yml.
+  #
+  #   submodule-updated  A commit landed on a tool's default branch. This is
+  #                      the same event submodule-dispatch.yml uses to bump the
+  #                      submodule pointer (sent by notify-hub.example.yml), so
+  #                      one dispatch now has two consequences. A commit does
+  #                      not change the catalog on its own, but it is the most
+  #                      frequent signal that a tool repository is active, and a
+  #                      rebuild that finds nothing new opens no pull request.
   repository_dispatch:
-    types: [release-published]
-  # A tool can be released without the notification firing -- a workflow that
-  # was never installed, a token that expired, a release published by hand. The
-  # schedule is what stops that turning into a catalog that is quietly months
-  # old.
-  schedule:
-    - cron: '17 5 * * *'
+    types: [release-published, submodule-updated]
+
+  # There is deliberately no `schedule:` here: this rebuilds on real events
+  # rather than on a clock. The consequence worth knowing is that a release
+  # published by hand, from a repository whose notifier is not installed or
+  # whose HUB_DISPATCH_TOKEN has lapsed, is now picked up by nothing at all.
+  # When that happens, rebuild from Actions > Catalog > Run workflow.
   workflow_dispatch:
     inputs:
       only:
-        description: 'Space-separated tool ids to rebuild (default: all)'
+        description: >-
+          Space-separated tool ids to rebuild. Every other tool keeps the entry
+          it already has. Leave empty to rebuild all.
         required: false
         default: ''
 
@@ -44,22 +58,32 @@ jobs:
       # event chooses these strings. Nothing here interpolates them into a
       # shell; the allowlist is so an unexpected sender shows up in the log
       # rather than silently causing a rebuild.
+      # The two dispatch types name their sender in different fields:
+      # `release-published` carries `repository` as `owner/name`, while
+      # `submodule-updated` carries `submodule` as the bare path from
+      # .gitmodules. Take whichever is present and check that against the same
+      # list. EVENT comes through the environment for the same reason the
+      # payload does -- nothing here reaches the shell as an expression.
       - name: Check the sender against the allowlist
         if: github.event_name == 'repository_dispatch'
         env:
           SENDER: ${{ github.event.client_payload.repository }}
+          SUBMODULE: ${{ github.event.client_payload.submodule }}
+          EVENT: ${{ github.event.action }}
         run: |
           allowed="ForgePact HSCraftSim HSSaveEditor HSSaveEditor-SteamDeck- \
                    HS-Offline-Launcher HS-Offline-Tracker HS-ValueEditor \
                    Hs-Offline-Loot-Forge hero-siege-item-editor hs-stat-forge"
           name="${SENDER##*/}"
+          [ -n "$name" ] || name="$SUBMODULE"
           for candidate in $allowed; do
             if [ "$candidate" = "$name" ]; then
-              echo "release notification from $name"
+              echo "$EVENT notification from $name"
               exit 0
             fi
           done
-          echo "::error::unrecognised sender '$SENDER'; not rebuilding"
+          echo "::error::unrecognised sender '${SENDER:-$SUBMODULE}' for \
+          '$EVENT'; not rebuilding"
           exit 1
 
       # The generator downloads every artifact to hash it. GITHUB_TOKEN raises
