@@ -120,7 +120,7 @@ it can invoke any command the app has. The window label is `hub`, not `main`;
 
 | | |
 | --- | --- |
-| Source | [`hub/`](hub) |
+| Source, and how to work on it | [`hub/`](hub) · [`hub/instructions.md`](hub/instructions.md) |
 | How it works, and what the manual testing found | [`docs/hub/design.md`](docs/hub/design.md) |
 | Catalog format | [`docs/hub/catalog-schema.md`](docs/hub/catalog-schema.md) |
 | Why submodules and not a monorepo | [`docs/adr/0001-repo-topology.md`](docs/adr/0001-repo-topology.md) |
@@ -238,25 +238,16 @@ configuration:
 }
 ```
 
-## Design Notes & Future Work
+## Design notes
 
-Longer-form notes, kept so the reasoning isn't re-derived from scratch later.
-The ownership plan is deliberately *not* on the roadmap; the hub note is the
-plan the hub was built from.
+Why something went the way it did is recorded next to the thing it describes —
+[`docs/hub/design.md`](docs/hub/design.md) for the hub,
+[`docs/adr/`](docs/adr) for decisions that outlived the discussion,
+[`docs/RUNTIME_DATA_MODELS.md`](docs/RUNTIME_DATA_MODELS.md) for the runtime
+item and stat structs, and each submodule's `instructions.md` for the tool
+itself.
 
-- [Steam ownership gating & offline integrity](docs/ownership-and-offline-integrity-plan.md)
-  — why Easy Anti-Cheat and exe-patching mods can never coexist, why EAC was never the
-  anti-piracy layer in the first place, and what a real Steam ownership check in
-  `HS-Offline-Launcher` would look like if the toolkit ever wanted one.
-
-- [Toolkit Hub: one app that installs, launches and updates every tool](docs/toolkit-hub-plan.md)
-  — why the hub owns windows and processes rather than tabs (five of the tools refuse
-  to be framed), why the ten repositories stay as submodules with the SDK coupling fixed
-  directly instead, and the signed catalog that pins a SHA-256 per release asset.
-
-- [Hub responsiveness: the UI thread was blocked on loopback network probes](docs/hub-responsiveness-plan.md)
-  — why the window used to be frozen roughly a third of the time it was idle, measured:
-  every Tauri command was synchronous and so ran on the thread that pumps WebView2, and
-  building the library view made four blocking health probes that each burned their whole
-  timeout because a closed loopback port takes two seconds to refuse on some machines.
-  The fix, and the numbers from before and after it, are both in there.
+Planning documents are deliberately **not** kept here; `*-plan.md` is in
+`.gitignore`. A plan says what someone intended to build and goes out of date
+the moment it is built, and a repository holding both leaves a reader two
+documents with no way to tell which one describes the software they are running.

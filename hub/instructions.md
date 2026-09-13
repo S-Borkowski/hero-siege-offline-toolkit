@@ -1,0 +1,189 @@
+# Toolkit Hub — development guide
+
+## Module overview & metadata
+
+- **Module name:** Toolkit Hub (`Hero Siege Toolkit`)
+- **Path:** `hub/` — **not a submodule.** It lives in this repository, so a
+  change here is an ordinary commit rather than a pointer move.
+- **Stack:** Tauri 2 + Svelte 5 (runes) frontend, Rust 2021 backend
+  (`rust-version = "1.88"`), Vite 8, Node 20.19+.
+- **Bundle:** NSIS, per-user, Windows x64 only. Identifier
+  `io.falorfrozen.herosiegetoolkithub`.
+- **Purpose:** Install, launch, update and roll back the ten tools in the
+  toolkit from a signed, hash-pinned catalog, without changing how any of them
+  behaves when started by hand.
+- **CI:** `.github/workflows/hub-release.yml` (tag `hub-v*`) builds, tests,
+  signs and publishes. `catalog.yml` / `catalog-publish.yml` feed it the
+  catalog.
+
+**Why each decision went the way it did is in
+[`docs/hub/design.md`](../docs/hub/design.md), and the catalog's fields are in
+[`docs/hub/catalog-schema.md`](../docs/hub/catalog-schema.md).** This guide is
+how to work on the code; it deliberately does not restate the reasoning.
+
+---
+
+## Repository map
+
+### `src/` — the Svelte 5 frontend
+
+| File | What it is |
+| --- | --- |
+| `main.js` | Mounts `App`, and carries the bail-out panel for a frontend that fails to start. |
+| `App.svelte` | The shell: sidebar, routing between screens, `connect()` on mount. |
+| `Library.svelte` | The grid, its filters, and the *Starred* row above the rest. |
+| `ToolCard.svelte` | One tool: state chip, one primary button, and the star + overflow glyphs on the title line. |
+| `ToolDetail.svelte` | One tool in full, including *Verify files*. |
+| `Updates.svelte`, `Downloads.svelte`, `Game.svelte`, `Settings.svelte`, `About.svelte`, `FirstRun.svelte` | The other screens. |
+| `TitleBar.svelte`, `StatusBar.svelte`, `Toasts.svelte` | Window chrome and notices. |
+| `library.svelte.js` | **The one copy of what the hub knows.** Every screen reads it; nothing recomputes it. |
+| `hub-update.svelte.js` | The hub's own updater, kept apart from the tools' catalog. |
+| `bridge.js` | The only file that knows whether Tauri is underneath. |
+| `skin.svelte.js`, `skin.css`, `theme.css` | Sprites and the three skins, adopted from HS-Offline-Tracker. |
+
+### `src-tauri/src/` — the Rust side
+
+Each module opens with a doc comment saying what it is for; read that first.
+
+| File | What it is |
+| --- | --- |
+| `lib.rs` | The commands, `ToolView`/`LibraryView`, `build_view`, `announce`, and the probe ticker. |
+| `catalog.rs` | The catalog's shape, where it comes from (bundle → cache → embedded), and `HUB_REPO`. |
+| `install.rs` | Download → verify → extract → activate, and rollback. |
+| `launch.rs` | Starting tools, noticing they started, stopping them, elevation. |
+| `verify.rs` | SHA-256 over artifacts, minisign over the catalog. |
+| `state.rs` | `state.json`: installed set, settings, starred tools, staged queue. |
+| `paths.rs` | Everything the hub writes, and the rule that it writes nothing else. |
+| `procs.rs` | One process-table snapshot, and the three questions asked of it. |
+| `game.rs` | Is Hero Siege up, is EAC up. |
+| `version.rs` | Comparing two version strings (`0.9.10` beats `0.9.8`). |
+| `log.rs` | The log file, including everything the web side reports. |
+
+---
+
+## Commands
+
+```bash
+cd hub
+npm install
+npm start           # the desktop app against a Vite dev server
+npm run dev         # the frontend alone, in a plain browser
+npm test            # cargo test (the Rust engine)
+npm run build       # the frontend bundle
+npm run release     # the NSIS installer
+npm run check       # build + test, what CI runs
+```
+
+- **`npm test` shells out to Rustup's `cargo.exe` directly** (`scripts/test.mjs`)
+  rather than through `cmd`, because a checkout path containing a space stopped
+  at the first word. Same for `npm run tauri` (`scripts/tauri.mjs`).
+- **Cargo needs PowerShell on this machine**, not the POSIX shell.
+- **`npm run dev` is the fast loop.** With Tauri absent, `bridge.js` answers
+  from the embedded catalog with everything stubbed as not installed, so the
+  grid, the cards, the detail view and the settings screen are all workable
+  without building the Rust side at all.
+
+---
+
+## Working on it
+
+### Adding a command
+
+1. Write it in `lib.rs` as `#[tauri::command(async)]`. **The `(async)` is not
+   optional** on anything that touches the disk or the network: without it the
+   command runs on the thread pumping WebView2's messages and the window takes
+   no clicks for its whole duration. Only `hub_info`, `get_settings` and
+   `report` are plain `#[tauri::command]`, because they read memory and nothing
+   else.
+2. Register it in `invoke_handler![...]` at the bottom of `run()`.
+3. **If it changes what a screen shows, call `announce(&app, &hub)`** before
+   returning. Announcing is the rule: the backend pushes a freshly built view
+   through `library-changed`, and no caller re-reads. A command that changes the
+   view without announcing must call `refresh()` at its own call site rather
+   than putting the cost on every other command.
+4. **Add an answer to `browserAnswers` in `bridge.js`**, or `npm run dev`
+   throws where the desktop build works.
+
+### Adding something to the view
+
+Decide it in Rust and carry it as a field on `ToolView`. `update_available` and
+`favorite` are both there for the same reason: one implementation, not one per
+screen.
+
+### Touching `build_view`
+
+**It must not make a network call.** Every tool that declares a health endpoint
+used to be probed here, and a loopback connect to a closed port costs its whole
+timeout on a machine that does not refuse promptly — 2.8 s for one view, built
+on the UI thread, on a ten-second poll. Probing now happens on the ticker and
+`build_view` reads its cache. `building_the_view_never_touches_the_network`
+fails if that creeps back.
+
+### Driving the running window
+
+A debug build starts an MCP bridge on `127.0.0.1:9223` — behind
+`#[cfg(debug_assertions)]`, because it can invoke any command the app has:
+
+```bash
+npx -y -p @hypothesi/tauri-mcp-cli tauri-mcp driver-session start --port 9223
+npx -y -p @hypothesi/tauri-mcp-cli tauri-mcp webview-screenshot --window-id hub --file-path shot.png --format png
+npx -y -p @hypothesi/tauri-mcp-cli tauri-mcp webview-interact  --window-id hub --action click --selector "button[aria-label='Star ForgePact']"
+```
+
+The window label is **`hub`**, not the `main` every tool defaults to. The other
+sharp edges are in [`docs/hub/design.md`](../docs/hub/design.md#driving-the-running-window)
+and in `agents.md`.
+
+---
+
+## Testing
+
+| Suite | Command | What it covers |
+| --- | --- | --- |
+| Rust unit | `npm test` | Version comparison, state round-trips, verification, paths, the view budget. |
+| Install e2e | `npm test` | `src-tauri/tests/install_e2e.rs` drives the whole pipeline over real HTTP against a local server: hash mismatch, path traversal, missing entry point, interrupted install, rollback, both interlocks. |
+| Against real releases | `npm test -- --ignored` | `src-tauri/tests/real_release.rs`. Downloads ~210 MB of genuine releases; ignored by default. |
+| The catalog | `py -3 -m unittest discover -s tests` (repo root) | Catalog generation, minisign, `cut_release`. |
+
+A change to the interface is not verified by the frontend compiling. Drive it
+through the bridge, assert against what it actually wrote (`state.json`, the
+log), and add a row to *Confirmed by hand* in `docs/hub/design.md`.
+
+---
+
+## Releasing
+
+`py -3 tools/cut_release.py <version>` moves the version in all six places at
+once; `--check` is what CI verifies against the tag. **Do not hand-edit them** —
+a mismatch fails the release. Then tag `hub-v<version>` and push.
+
+`HUB_REPO` in `src-tauri/src/catalog.rs` decides where the catalog, the hub's
+own updates and the documentation links point. `hub-release.yml` sets it from
+`github.repository`, so whichever repository publishes a hub builds one that
+points back at itself. To build for a fork:
+`HUB_REPO=owner/hero-siege-offline-toolkit npm run release`.
+
+---
+
+## Gotchas
+
+- **`*.png` is banned by the root `.gitignore`** (it exists to keep extracted
+  game sprites out of the repository). Every sprite the hub draws is generated
+  SVG in `skin.svelte.js`. The six icon squares Tauri demands are the only PNGs,
+  and `hub/.gitignore` re-includes exactly those.
+- **`encodeURIComponent` does not encode `(` or `)`**, and every sprite refers
+  to its own gradient as `url(#p)`. Unquoted inside a CSS `url(...)` those close
+  the token early and the sprite silently does not paint — while working fine in
+  an `<img src>`, which is what makes it easy to miss. `svg()` encodes all three.
+- **These are nine-slice marks.** Painted as `background-image` they stretch;
+  `skin.css` uses `border-image` with a slice. A button's sprite insets its
+  plate 7/64 from the top and bottom, so a plain CSS border of the same height
+  next to one looks taller than it.
+- **A signature failure is usually a stale worktree, not a signing problem.**
+  `.gitattributes` marks the catalog and its signature `-text`; a checkout that
+  rewrote `catalog.json` with CRLF is a catalog the hub refuses to load.
+- **The worktree is CRLF.** A script that rewrites a file in Python text mode
+  flips the whole file to LF and buries the real change in the diff. Use binary
+  I/O.
+- **`node_modules` is often missing** after a fresh clone of this repository;
+  `npm install` first.

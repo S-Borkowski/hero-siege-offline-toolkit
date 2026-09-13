@@ -393,6 +393,20 @@ Upon completing any task or making changes to features, workflows, architecture,
 - Update documentation, instructions (such as submodule `instructions.md` files), and `README.md` files when and where relevant to reflect the changes.
 - Ensure any new guides, updated links, or modified commands remain accurate and in sync across project and submodule documentation.
 
+**Record what was built, not what you meant to build.** `*-plan.md` is in this
+repository's `.gitignore`. A plan is a working note: it is out of date the
+moment the thing exists, and a repository carrying both leaves the next reader
+two documents and no way to tell which describes the software they are running.
+So when a plan's work lands, fold the reasoning that is still true into the
+document that describes the result — `docs/hub/design.md`, a `docs/adr/` entry
+for a decision that outlived its discussion, or the submodule's
+`instructions.md` — and leave the plan on your own machine.
+
+This is a rule about *this* repository. The research and plan documents under
+`ForgePact/docs/` belong to that submodule, which keeps them deliberately: an
+investigation that came back negative is a result, and re-running it is the
+expensive mistake.
+
 ## YYToolkit Integration
 
 When a prompt or task requires the use of `yytoolkit`, attempt to retrieve `yytoolkit` documentation and references from the `context7` MCP server if it is available.

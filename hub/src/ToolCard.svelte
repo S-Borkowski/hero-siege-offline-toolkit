@@ -176,21 +176,67 @@
 </script>
 
 <article class="card skin skin-chip" class:starred={tool.favorite} style="--skin-src:url({art('chip_dark')})">
-  <!-- Outside `.body` rather than in the heading beside the name: `.body` is
-       itself a button, and a button inside a button is not something the
-       browser will give you two separate clicks on. -->
-  <button
-    class="star"
-    type="button"
-    aria-pressed={tool.favorite}
-    aria-label={tool.favorite ? `Unstar ${tool.name}` : `Star ${tool.name}`}
-    title={tool.favorite ? 'Starred — kept at the top of the Library' : 'Star this to keep it at the top of the Library'}
-    onmouseenter={() => (hovered = 'star')}
-    onmouseleave={() => (hovered = '')}
-    onclick={toggleStar}
-  >
-    <img src={art(`star_${tool.favorite ? 'on' : 'off'}${hovered === 'star' ? '_hover' : ''}`)} alt="" />
-  </button>
+  <!-- The star and the overflow menu, on the title's line and outside `.body`.
+       Outside because `.body` is itself a button, and a button inside a button
+       is not something the browser will give you two separate clicks on. Both
+       are borderless: they are glyphs next to a heading, not controls of the
+       same weight as the primary button below. -->
+  <div class="corner">
+    <button
+      class="glyph star"
+      type="button"
+      aria-pressed={tool.favorite}
+      aria-label={tool.favorite ? `Unstar ${tool.name}` : `Star ${tool.name}`}
+      title={tool.favorite ? 'Starred — kept at the top of the Library' : 'Star this to keep it at the top of the Library'}
+      onmouseenter={() => (hovered = 'star')}
+      onmouseleave={() => (hovered = '')}
+      onclick={toggleStar}
+    >
+      <img src={art(`star_${tool.favorite ? 'on' : 'off'}${hovered === 'star' ? '_hover' : ''}`)} alt="" />
+    </button>
+
+    <div class="menu-anchor">
+      <button
+        class="glyph more"
+        type="button"
+        aria-label="More actions for {tool.name}"
+        aria-expanded={menuOpen}
+        onclick={() => (menuOpen = !menuOpen)}
+        onmouseenter={() => (hovered = 'more')}
+        onmouseleave={() => (hovered = '')}
+      >
+        <img src={art(hovered === 'more' ? 'more_hover' : 'more')} alt="" />
+      </button>
+
+      {#if menuOpen}
+        <!-- A click anywhere else closes it; without this the menu survives a
+             click on another card and two can be open at once. -->
+        <button class="scrim" type="button" aria-label="Close menu" onclick={() => (menuOpen = false)}></button>
+        <ul class="menu skin skin-panel" style="--skin-src:url({art('panel')})">
+          <li><button type="button" onclick={() => overflow('open_url', { url: tool.notes_url })}>Release notes</button></li>
+          <!-- The backend builds this from HUB_REPO. Composing it here meant
+               the interface held an opinion about which repository the hub came
+               from, and held a stale one. -->
+          {#if tool.guide_url}
+            <li><button type="button" onclick={() => overflow('open_url', { url: tool.guide_url })}>Developer guide</button></li>
+          {/if}
+          {#if tool.install_path}
+            <li><button type="button" onclick={() => overflow('open_path', { path: tool.install_path })}>Open folder</button></li>
+            <li><button type="button" onclick={() => onopen?.(tool.id, 'verify')}>Verify files</button></li>
+          {/if}
+          {#if tool.can_roll_back}
+            <li><button type="button" onclick={() => overflow('rollback_tool')}>Roll back</button></li>
+          {/if}
+          {#if tool.source_available}
+            <li><button type="button" onclick={() => overflow('launch_tool', { fromSource: true })}>Run from source</button></li>
+          {/if}
+          {#if tool.installed_version}
+            <li><button class="danger" type="button" onclick={() => overflow('uninstall_tool')}>Uninstall</button></li>
+          {/if}
+        </ul>
+      {/if}
+    </div>
+  </div>
 
   <button class="body" type="button" onclick={() => onopen?.(tool.id)}>
     <h3>{tool.name}</h3>
@@ -236,48 +282,6 @@
       <img src={art(hovered === 'primary' ? `${primary.icon}_hover` : primary.icon)} alt="" />
       {primary.label}
     </button>
-
-    <div class="menu-anchor">
-      <button
-        class="more"
-        type="button"
-        aria-label="More actions for {tool.name}"
-        aria-expanded={menuOpen}
-        onclick={() => (menuOpen = !menuOpen)}
-        onmouseenter={() => (hovered = 'more')}
-        onmouseleave={() => (hovered = '')}
-      >
-        <img src={art(hovered === 'more' ? 'more_hover' : 'more')} alt="" />
-      </button>
-
-      {#if menuOpen}
-        <!-- A click anywhere else closes it; without this the menu survives a
-             click on another card and two can be open at once. -->
-        <button class="scrim" type="button" aria-label="Close menu" onclick={() => (menuOpen = false)}></button>
-        <ul class="menu skin skin-panel" style="--skin-src:url({art('panel')})">
-          <li><button type="button" onclick={() => overflow('open_url', { url: tool.notes_url })}>Release notes</button></li>
-          <!-- The backend builds this from HUB_REPO. Composing it here meant
-               the interface held an opinion about which repository the hub came
-               from, and held a stale one. -->
-          {#if tool.guide_url}
-            <li><button type="button" onclick={() => overflow('open_url', { url: tool.guide_url })}>Developer guide</button></li>
-          {/if}
-          {#if tool.install_path}
-            <li><button type="button" onclick={() => overflow('open_path', { path: tool.install_path })}>Open folder</button></li>
-            <li><button type="button" onclick={() => onopen?.(tool.id, 'verify')}>Verify files</button></li>
-          {/if}
-          {#if tool.can_roll_back}
-            <li><button type="button" onclick={() => overflow('rollback_tool')}>Roll back</button></li>
-          {/if}
-          {#if tool.source_available}
-            <li><button type="button" onclick={() => overflow('launch_tool', { fromSource: true })}>Run from source</button></li>
-          {/if}
-          {#if tool.installed_version}
-            <li><button class="danger" type="button" onclick={() => overflow('uninstall_tool')}>Uninstall</button></li>
-          {/if}
-        </ul>
-      {/if}
-    </div>
   </footer>
 </article>
 
@@ -305,33 +309,50 @@
   }
   h3 {
     margin: 0;
-    /* Room for the star, which floats over this corner. */
-    padding-right: 26px;
+    /* Room for the two glyphs sharing this line. */
+    padding-right: 48px;
     font-size: 14.5px;
+    /* Stated rather than inherited, because `.corner` is centred against it. */
+    line-height: 20px;
     color: var(--bone-13);
     letter-spacing: 0.02em;
   }
 
-  /* Sits over the card's top-right corner. The nine-slice border draws 11px of
-     inset, so this is placed inside that rather than on top of the frame. */
-  .star {
+  /* The star and the overflow menu, on the title's line.
+     14px is where the content starts: the nine-slice border draws 11px of inset
+     and `.card` adds 3px of padding inside it, so this lines up with the
+     heading's own box rather than floating over the frame. Its height is the
+     heading's line box, so `align-items: center` centres both glyphs on the
+     title however long the name is. */
+  /* Deliberately no `z-index`: being positioned is already enough to paint it
+     over `.body`, which is not, and a stacking context here would trap the
+     menu's `z-index: 11` inside this 42px box -- where the next card's own
+     glyphs would then paint over the open menu. */
+  .corner {
     position: absolute;
-    top: 8px;
-    right: 8px;
-    z-index: 2;
-    width: 24px;
-    height: 24px;
+    top: 14px;
+    right: 14px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+  .glyph {
+    width: 22px;
+    height: 22px;
     padding: 0;
     background: none;
     border: none;
+    border-radius: 6px;
     cursor: pointer;
     display: grid;
     place-items: center;
     opacity: 0.5;
   }
-  .star img { width: 18px; height: 18px; }
-  .star:hover, .card.starred .star { opacity: 1; }
-  .star:focus-visible { outline: 1px solid var(--edge-7); border-radius: 6px; opacity: 1; }
+  .glyph img { width: 16px; height: 16px; }
+  .glyph:hover, .card.starred .star { opacity: 1; }
+  .glyph[aria-expanded='true'] { opacity: 1; }
+  .glyph:focus-visible { outline: 1px solid var(--edge-7); opacity: 1; }
   .summary {
     margin: 0;
     font-size: 12px;
@@ -374,7 +395,12 @@
   .counted { margin: 0 0 4px; font-size: 10.5px; color: var(--bone-4); }
   .counted.verifying { margin-top: 10px; color: var(--arcane); }
 
-  footer { display: flex; gap: 6px; align-items: stretch; margin-top: 10px; }
+  /* One control, full width. The overflow menu used to sit here as a 38px
+     bordered square, which read as a second button of equal weight beside the
+     primary one -- and was visibly taller than it, because the button sprite
+     insets its plate 7/64 from the top and bottom while a plain CSS border does
+     not. Moving it up to the title line settles both. */
+  footer { display: flex; margin-top: 10px; }
   .primary {
     flex: 1;
     display: inline-flex;
@@ -394,18 +420,6 @@
   .primary img { width: 15px; height: 15px; }
 
   .menu-anchor { position: relative; }
-  .more {
-    width: 38px;
-    height: 100%;
-    background: none;
-    border: 1px solid var(--edge-3);
-    border-radius: 9px;
-    cursor: pointer;
-    display: grid;
-    place-items: center;
-  }
-  .more:hover { border-color: var(--edge-7); }
-  .more img { width: 16px; height: 16px; }
 
   .scrim {
     position: fixed;
@@ -415,10 +429,13 @@
     cursor: default;
     z-index: 10;
   }
+  /* Downwards now that its button is at the top of the card. Upwards from here
+     would put the menu over the title it belongs to, or off the top of the
+     first row entirely. */
   .menu {
     position: absolute;
     right: 0;
-    bottom: calc(100% + 6px);
+    top: calc(100% + 6px);
     z-index: 11;
     margin: 0;
     padding: 0;

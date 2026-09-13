@@ -2,7 +2,7 @@
 
 **Status:** accepted, 2026-09-11
 **Supersedes:** nothing
-**Context:** [`docs/toolkit-hub-plan.md`](../toolkit-hub-plan.md) D1
+**Context:** the Toolkit Hub, [`docs/hub/design.md`](../hub/design.md)
 
 ---
 

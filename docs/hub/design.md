@@ -3,10 +3,9 @@
 One window that installs, launches and updates the ten tools in the Hero Siege
 Offline Toolkit. Tauri 2 + Svelte 5, in [`hub/`](../../hub).
 
-The reasoning behind the decisions here is in
-[`docs/toolkit-hub-plan.md`](../toolkit-hub-plan.md); the topology question has
-its own record in [`docs/adr/0001-repo-topology.md`](../adr/0001-repo-topology.md).
-This document describes what was built.
+This document describes what was built, and why each decision went the way it
+did. The topology question has its own record in
+[`docs/adr/0001-repo-topology.md`](../adr/0001-repo-topology.md).
 
 ---
 
@@ -220,7 +219,7 @@ with it.
 
 | Screen | What it is for |
 | --- | --- |
-| Library | The grid. Card per tool: name, one line, state chip, one primary button, overflow menu, and a star in the corner. |
+| Library | The grid. Card per tool: name, one line, state chip, one primary button, and a star plus an overflow menu on the title's line. |
 | Updates | Everything with a newer release, *Update all*, and the staged queue with its reasons. |
 | Game | Whether Hero Siege and EAC are running — so the interlocks are legible rather than mysterious — and a way to start the game through HS Offline Launcher. |
 | Settings | Work offline, check on launch, auto-download, auto-install (nested), skin, developer mode. |
@@ -250,6 +249,25 @@ Three things follow from it being a set of ids and not an ordering:
 frontend cannot write one; unstarring is allowed for any id, because a tool that
 has since left the catalog must still be removable. A click that changes nothing
 returns without writing `state.json` or rebuilding the view.
+
+### One button on a card, and two glyphs
+
+The star and the overflow menu share the title's line, right-aligned and
+borderless; the primary button below has the footer to itself.
+
+The overflow menu used to sit in that footer as a 38px bordered square, and it
+read as a second control of equal weight beside *Install* — which it is not; it
+is a place to put the six things a card cannot show. It was also visibly taller
+than the button next to it, because `skin-button`'s sprite insets its plate
+7/64 from the top and bottom while a plain CSS border does not, so two elements
+of identical height looked mismatched.
+
+Both glyphs sit outside `.body`. `.body` is itself a button — the whole card
+opens the detail view — and a button inside a button does not give you two
+separate clicks. `.corner` is positioned but carries **no `z-index`**: being
+positioned is enough to paint it over `.body`, and a stacking context there
+would trap the open menu's `z-index` inside a 42px box, where the next card's
+glyphs would paint over it.
 
 ### Two things about the sprites
 
@@ -462,7 +480,8 @@ checks a test cannot make, and because three of them found defects.
 | `kind: "html"` | Opened in the browser rather than spawned |
 | Uninstall | Removed, back to *Not installed* |
 | Star two tools, unstar one | Cards moved into the *Starred* row and back; `state.json` held exactly the starred ids after each click (2026-09-13) |
-| *Join the Discord* | Invite resolves; opened through `open_url`, which hands it to the system browser (2026-09-13) |
+| *Join the Discord* | Invite resolves and does not expire (`expires_at: null`); opened through `open_url`, which hands it to the system browser (2026-09-13) |
+| Card controls after the move | Star and overflow centred on the title line; menu opens downward and paints over the card below it; primary button has the footer to itself (2026-09-13) |
 
 #### Stop kills a tree
 

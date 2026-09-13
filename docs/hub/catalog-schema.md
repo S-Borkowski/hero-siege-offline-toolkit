@@ -7,8 +7,11 @@ from the hand-written rules in
 [`catalog/sources.toml`](../../catalog/sources.toml), signed with minisign, and
 fetched by the hub as a single request.
 
-Why generated and signed rather than queried live, see **D3** in
-[`docs/toolkit-hub-plan.md`](../toolkit-hub-plan.md).
+Why generated and signed rather than queried live: **The verification chain** in
+[`docs/hub/design.md`](design.md). The short version is that a live query to ten
+GitHub APIs has nothing to sign — the hub would be trusting whatever the network
+handed it, one request at a time, with no way to tell a swapped asset from a new
+release.
 
 ---
 

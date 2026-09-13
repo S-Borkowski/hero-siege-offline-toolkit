@@ -11,8 +11,12 @@
    * Opened through `open_url`, which hands it to the system browser and refuses
    * anything that is not http(s) -- the hub never navigates its own webview
    * somewhere else, and an invite is not a reason to start.
+   *
+   * This must be a **never-expiring** invite. A hub release is a thing people
+   * keep for months, so an invite with a `max_age` is a dead link with a
+   * release date on it.
    */
-  const DISCORD_URL = 'https://discord.gg/jcnVnJQNK';
+  const DISCORD_URL = 'https://discord.gg/ZZRCjSN4kr';
 
   let discordHovered = $state(false);
 
