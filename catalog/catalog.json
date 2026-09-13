@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated": "2026-09-11T21:53:52Z",
+  "generated": "2026-09-13T11:07:37Z",
   "tools": [
     {
       "id": "forgepact",
@@ -204,9 +204,9 @@
       "summary": "Cube crafting simulator with the full recipe database.",
       "repo": "falorfrozen-cmd/HSCraftSim",
       "submodule": "HSCraftSim",
-      "version": "1.0.2",
-      "tag": "v1.0.2",
-      "published": "2026-09-08T18:39:14Z",
+      "version": "1.0.4",
+      "tag": "v1.0.4",
+      "published": "2026-09-12T17:20:12Z",
       "license": "NOASSERTION",
       "requires": {
         "admin": false,
@@ -216,12 +216,12 @@
       },
       "artifact": {
         "kind": "zip",
-        "name": "HSCraftSim-1.0.2-Windows-x64.zip",
-        "url": "https://github.com/falorfrozen-cmd/HSCraftSim/releases/download/v1.0.2/HSCraftSim-1.0.2-Windows-x64.zip",
-        "size": 31144563,
-        "sha256": "c1279a2f5aac791a6de391421f99443c41ac252a7e8619528b4e6bb94a9165a2",
+        "name": "HSCraftSim-1.0.4-Windows-x64.zip",
+        "url": "https://github.com/falorfrozen-cmd/HSCraftSim/releases/download/v1.0.4/HSCraftSim-1.0.4-Windows-x64.zip",
+        "size": 31149546,
+        "sha256": "5eb15d2dae21afcd3bc0f24bc51ac03214b1be967415aff152f48a74029afc39",
         "sha256_source": "published+verified",
-        "strip_prefix": "HSCraftSim-1.0.2-Windows-x64/"
+        "strip_prefix": "HSCraftSim-1.0.4-Windows-x64/"
       },
       "launch": {
         "exe": "HSCraftSim.exe",
@@ -244,8 +244,8 @@
           "timeout_s": 25
         }
       },
-      "notes_url": "https://github.com/falorfrozen-cmd/HSCraftSim/releases/tag/v1.0.2",
-      "notes": "HSCraftSim 1.0.2 adds creator credits and community links, following the Recipes fix in 1.0.1.\r\n\r\n## Credits and community\r\n\r\n- **Created by Falor** is visible below the logo on desktop and mobile.\r\n- **About / Credits** identifies **Falor** as creator and **Graxy_TV** as host, with separate game credits.\r\n- [Falor's Discord](https://discord.gg/3wWfYubgb3) — bug reports and feedback.\r\n- [Graxy_TV's Discord](https://discord.gg/fDtXAQu5c3) — community.\r\n- Both communities are also linked directly in the footer. Discord opens externally and leaves the Cube session in the simulator.\r\n\r\n## Download\r\n\r\nDownload **HSCraftSim-1.0.2-Windows-x64.zip**, extract it, then open **HSCraftSim.exe**. The standalone EXE is also available below. Replacing the app preserves your existing simulator session.\r\n\r\nWindows 10/11 x64 and Microsoft Edge WebView2 Runtime are required. Python, Node.js and a Hero Siege installation are not required. The same interface is included in the static website build.\r\n\r\n## Verification\r\n\r\nGeneral regression and static package checks passed, together with 25 craft-workspace browser checks and About/footer checks at five viewport sizes. The packaged EXE passed two isolated WebView2 launches, About opening/closing, credit and Discord-target checks, focus restoration, and cross-launch session persistence.\r\n\r\nNo crafting rules changed. This remains an unofficial player test build with the documented game-data limitations.\n\n## Source distribution update — 2026-09-09\n\nThe existing Windows EXE, Windows ZIP and their original checksum files are unchanged. The GitHub-generated source archives now exclude game-derived media, bundled fonts, bulk data and captured research/test outputs. A fresh source checkout requires compatible inputs supplied locally; see [LOCAL-DATA.md](https://github.com/falorfrozen-cmd/HSCraftSim/blob/main/LOCAL-DATA.md).\n\nThe [maintained source-only ZIP](https://github.com/falorfrozen-cmd/HSCraftSim/releases/download/v1.0.2/HSCraftSim-1.0.2-Source.zip) includes setup helpers. The [research scripts ZIP](https://github.com/falorfrozen-cmd/HSCraftSim/releases/download/v1.0.2/HSCraftSim-Research-Scripts-2026-09-09.zip) contains analysis scripts and instructions, without decompiled outputs or extracted game files. Checksums are attached separately to v1.0.2.\n\nSource cleanup does not establish permission for embedded third-party content in existing binaries or certify the remaining implementation as legally cleared. See [distribution scope](https://github.com/falorfrozen-cmd/HSCraftSim/blob/main/DISTRIBUTION.md). Existing contributors should follow the [fresh-clone instructions](https://github.com/falorfrozen-cmd/HSCraftSim/blob/main/docs/AFTER-SOURCE-CLEANUP.md) because the historical commit/tag IDs changed.",
+      "notes_url": "https://github.com/falorfrozen-cmd/HSCraftSim/releases/tag/v1.0.4",
+      "notes": "HSCraftSim 1.0.4 is the Community edition, with Falor's creator credit and Discord link. The previous host credit and host Discord link have been removed from About and the footer.\n\nEligible Crystal-removal and Wisdom recipes now appear first under **Suggested next step**, including when materials still need to be added. This respects recipe filters and does not change the selected recipe, craft rules or Undo randomness.\n\nA separate Website edition can be generated locally with **Created by Falor** and no Discord links. The files attached to this release are the Community edition.\n\n### Download\n\n- **HSCraftSim.exe**: standalone Windows application.\n- **HSCraftSim-1.0.4-Windows-x64.zip**: the same EXE with instructions, notices and verification report.\n- **HSCraftSim-1.0.4-Source.zip**: source code. Extracted game data is excluded; follow LOCAL-DATA.md before running or rebuilding from source.\n- **HSCraftSim-1.0.4-SHA256SUMS.txt**: download checksums.\n\nWindows 10/11 x64 and Microsoft Edge WebView2 Runtime are required. Existing desktop sessions are preserved.\n\n### Validation\n\nPassed the regression suite, static web package checks, About/footer navigation at five desktop and mobile sizes for both editions, Website Python/WebView2 startup, and two isolated launches of the standalone Community EXE with session restoration. Public source packaging passed the repository's distribution checks.",
       "guide": "docs/submodules/HSCraftSim/instructions.md",
       "source_launch": {
         "cmd": "py",
@@ -425,7 +425,7 @@
         "url": "https://github.com/falorfrozen-cmd/hs-stat-forge/releases/download/v2.5.0/HS-Offline-Stat-Forge-v2.5.0.zip",
         "size": 13201135,
         "sha256": "91e1db25bf2102b746d329566317ebfc338f72efdfb2c58e269a83a2ac8ad3fa",
-        "sha256_source": "computed",
+        "sha256_source": "published+verified",
         "strip_prefix": "HS-Offline-Stat-Forge-v2.5.0/"
       },
       "launch": {
