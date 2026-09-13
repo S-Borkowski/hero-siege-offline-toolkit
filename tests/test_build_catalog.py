@@ -527,6 +527,112 @@ class TestCatalogAssembly(unittest.TestCase):
         with self.assertRaises(CatalogError):
             bc.build_catalog(sources, fetcher, only=["nope"])
 
+    def _two_tool_sources(self):
+        return {
+            "schema": 1,
+            "tool": [
+                {"id": "a", "name": "A", "repo": "o/a",
+                 "asset_pattern": r"^x\.zip$", "kind": "zip",
+                 "launch": {"exe": "x.exe"}},
+                {"id": "b", "name": "B", "repo": "o/b",
+                 "asset_pattern": r"^y\.zip$", "kind": "zip",
+                 "launch": {"exe": "y.exe"}},
+            ],
+        }
+
+    def _fetcher_for(self, *ids):
+        releases, blobs = {}, {}
+        for tool_id, name in (("a", "x"), ("b", "y")):
+            if tool_id not in ids:
+                continue
+            archive = make_zip({f"{name}.exe": b"MZ"})
+            releases[f"o/{tool_id}"] = {
+                "tag_name": "v2.0.0",
+                "assets": [asset(f"{name}.zip", size=len(archive))],
+            }
+            blobs[f"{name}.zip"] = archive
+        return FakeFetcher(releases, blobs)
+
+    def test_partial_rebuild_keeps_the_tools_it_did_not_rebuild(self):
+        # The whole point: --only must not publish a catalog that silently drops
+        # every tool it was not asked about.
+        previous = {
+            "schema": 1,
+            "generated": "2026-09-01T00:00:00Z",
+            "tools": [
+                {"id": "a", "name": "A", "version": "1.0.0"},
+                {"id": "b", "name": "B", "version": "1.0.0"},
+            ],
+            "warnings": ["b: something was odd last time"],
+        }
+        catalog = bc.build_catalog(
+            self._two_tool_sources(), self._fetcher_for("a"),
+            only=["a"], previous=previous, generated="2026-09-13T00:00:00Z",
+        )
+
+        self.assertEqual([t["id"] for t in catalog["tools"]], ["a", "b"])
+        rebuilt, kept = catalog["tools"]
+        self.assertEqual(rebuilt["version"], "2.0.0", "the named tool was rebuilt")
+        self.assertEqual(kept, previous["tools"][1], "the other entry is carried over verbatim")
+        self.assertIn("b: something was odd last time", catalog["warnings"])
+
+    def test_partial_rebuild_never_fetches_the_tools_it_carries_over(self):
+        previous = {
+            "schema": 1, "generated": "2026-09-01T00:00:00Z",
+            "tools": [{"id": "a"}, {"id": "b"}], "warnings": [],
+        }
+        fetcher = self._fetcher_for("a")
+        bc.build_catalog(self._two_tool_sources(), fetcher, only=["a"], previous=previous)
+        self.assertEqual(fetcher.release_calls, ["o/a"])
+
+    def test_entries_stay_in_sources_order_regardless_of_previous_order(self):
+        previous = {
+            "schema": 1, "generated": "2026-09-01T00:00:00Z",
+            "tools": [{"id": "b"}, {"id": "a"}], "warnings": [],
+        }
+        catalog = bc.build_catalog(
+            self._two_tool_sources(), self._fetcher_for("b"), only=["b"], previous=previous,
+        )
+        self.assertEqual([t["id"] for t in catalog["tools"]], ["a", "b"])
+
+    def test_partial_rebuild_with_no_previous_catalog_is_fatal(self):
+        with self.assertRaises(CatalogError) as caught:
+            bc.build_catalog(self._two_tool_sources(), self._fetcher_for("a"), only=["a"])
+        self.assertIn("drop --only", str(caught.exception))
+
+    def test_partial_rebuild_across_a_schema_change_is_fatal(self):
+        previous = {"schema": 99, "tools": [{"id": "b"}], "warnings": []}
+        with self.assertRaises(CatalogError):
+            bc.build_catalog(
+                self._two_tool_sources(), self._fetcher_for("a"),
+                only=["a"], previous=previous,
+            )
+
+    def test_a_tool_missing_from_both_only_and_previous_is_fatal(self):
+        # sources.toml gained a tool, someone rebuilt a different one. Omitting
+        # the newcomer silently is the bug; failing loudly is the fix.
+        previous = {"schema": 1, "tools": [{"id": "a"}], "warnings": []}
+        with self.assertRaises(CatalogError) as caught:
+            bc.build_catalog(
+                self._two_tool_sources(), self._fetcher_for("a"),
+                only=["a"], previous=previous,
+            )
+        self.assertIn("b", str(caught.exception))
+
+    def test_full_rebuild_contains_every_tool_in_sources(self):
+        sources = self._two_tool_sources()
+        catalog = bc.build_catalog(sources, self._fetcher_for("a", "b"))
+        self.assertEqual(
+            [t["id"] for t in catalog["tools"]],
+            [t["id"] for t in sources["tool"]],
+        )
+
+    def test_only_naming_every_tool_needs_no_previous_catalog(self):
+        catalog = bc.build_catalog(
+            self._two_tool_sources(), self._fetcher_for("a", "b"), only=["a", "b"],
+        )
+        self.assertEqual([t["id"] for t in catalog["tools"]], ["a", "b"])
+
     def test_serialization_is_stable_and_newline_terminated(self):
         catalog = {"schema": 1, "generated": "2026-09-11T00:00:00Z", "tools": [], "warnings": []}
         payload = bc.serialize(catalog)

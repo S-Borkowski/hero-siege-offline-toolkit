@@ -389,6 +389,52 @@ def _trim_notes(body: str, limit: int = 8000) -> str:
     return body[:limit].rstrip() + "\n\n[...truncated; see the release page...]"
 
 
+def load_previous(path: Path) -> Optional[Dict[str, Any]]:
+    """The catalog already on disk, or None if there is not a readable one.
+
+    Only a partial rebuild needs this: it is where the tools that are not being
+    rebuilt get carried over from.
+    """
+    try:
+        with path.open("rb") as handle:
+            return json.load(handle)
+    except FileNotFoundError:
+        return None
+    except json.JSONDecodeError as exc:
+        raise CatalogError(f"{path} exists but is not readable as JSON: {exc}") from None
+
+
+def _carried_entries(previous: Optional[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """Existing entries keyed by tool id, for a partial rebuild to reuse."""
+    if previous is None:
+        raise CatalogError(
+            "--only rebuilds some tools and carries the rest over from the "
+            "existing catalog, but no existing catalog was readable. Rebuild "
+            "everything instead (drop --only)."
+        )
+    if previous.get("schema") != SCHEMA_VERSION:
+        raise CatalogError(
+            f"the existing catalog is schema {previous.get('schema')!r} but this "
+            f"generator writes schema {SCHEMA_VERSION}. Carrying entries across a "
+            f"schema change would mix two shapes in one file; rebuild everything "
+            f"instead (drop --only)."
+        )
+    return {entry["id"]: entry for entry in previous.get("tools", [])}
+
+
+def _carried_warnings(previous: Optional[Dict[str, Any]], tool_id: str) -> List[str]:
+    """Previous warnings belonging to a tool that is being carried over.
+
+    Every warning is emitted as `f"{tool_id}: ..."`, so the prefix identifies
+    the tool it came from. Dropping them would make a partial rebuild look
+    cleaner than the catalog it actually produced.
+    """
+    if not previous:
+        return []
+    prefix = f"{tool_id}: "
+    return [w for w in previous.get("warnings", []) if w.startswith(prefix)]
+
+
 def build_catalog(
     sources: Dict[str, Any],
     fetcher: Any,
@@ -396,18 +442,46 @@ def build_catalog(
     only: Optional[Iterable[str]] = None,
     download: bool = True,
     generated: Optional[str] = None,
+    previous: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    """Build the catalog from `sources`, rebuilding `only` those tool ids.
+
+    A partial rebuild is still a *complete* catalog: tools that were not named
+    keep the entry they already had in `previous`. Writing only the rebuilt
+    tools would replace a ten-tool catalog with a one-tool catalog, and since
+    the result is signed and published, that silently unpublishes nine tools.
+
+    Entries always come out in `sources.toml` order, so a partial rebuild and a
+    full rebuild produce the same file except for the tools actually rebuilt.
+    """
     only_set = set(only) if only else None
+    if only_set is not None:
+        unknown = only_set - {tool["id"] for tool in sources["tool"]}
+        if unknown:
+            raise CatalogError(f"--only named unknown tools: {', '.join(sorted(unknown))}")
+
+    # Resolved on first use, so `--only` naming every tool in sources.toml is a
+    # plain full rebuild and needs no existing catalog to carry anything from.
+    carried: Optional[Dict[str, Dict[str, Any]]] = None
+
     warnings: List[str] = []
     tools: List[Dict[str, Any]] = []
     for tool in sources["tool"]:
-        if only_set is not None and tool["id"] not in only_set:
+        tool_id = tool["id"]
+        if only_set is None or tool_id in only_set:
+            tools.append(build_tool_entry(tool, fetcher, download=download, warnings=warnings))
             continue
-        tools.append(build_tool_entry(tool, fetcher, download=download, warnings=warnings))
-    if only_set is not None:
-        missing = only_set - {t["id"] for t in tools}
-        if missing:
-            raise CatalogError(f"--only named unknown tools: {', '.join(sorted(missing))}")
+        if carried is None:
+            carried = _carried_entries(previous)
+        if tool_id not in carried:
+            raise CatalogError(
+                f"{tool_id} is declared in sources.toml, was not named by --only, "
+                f"and has no entry in the existing catalog to carry over. "
+                f"Rebuild everything (drop --only) rather than publishing a "
+                f"catalog that is missing a tool."
+            )
+        tools.append(carried[tool_id])
+        warnings.extend(_carried_warnings(previous, tool_id))
     return {
         "schema": SCHEMA_VERSION,
         "generated": generated or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -432,7 +506,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--sources", type=Path, default=repo_root / "catalog" / "sources.toml")
     parser.add_argument("--out", type=Path, default=repo_root / "catalog" / "catalog.json")
-    parser.add_argument("--only", nargs="+", default=None, metavar="ID")
+    parser.add_argument("--only", nargs="+", default=None, metavar="ID",
+                        help="rebuild just these tool ids; every other tool keeps "
+                             "the entry it already has in --out")
     parser.add_argument(
         "--no-download",
         action="store_true",
@@ -453,8 +529,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         sources = load_sources(args.sources)
         fetcher = GitHubFetcher(token=args.token, cache_dir=args.cache_dir)
+        # Only a partial rebuild reads the existing catalog, and it reads the
+        # file it is about to overwrite: that is where the tools it is not
+        # rebuilding come from.
         catalog = build_catalog(
-            sources, fetcher, only=args.only, download=not args.no_download
+            sources,
+            fetcher,
+            only=args.only,
+            download=not args.no_download,
+            previous=load_previous(args.out) if args.only else None,
         )
     except CatalogError as exc:
         print(f"error: {exc}", file=sys.stderr)
