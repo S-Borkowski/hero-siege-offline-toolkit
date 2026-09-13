@@ -44,6 +44,20 @@ jobs:
           python tools/minisign.py verify catalog/catalog.json \
             --public-key catalog/catalog-signing.pub
 
+      # The version lives in six places across five files. This used to compare
+      # the tag against two of them, in the build job, and the four it skipped
+      # included `Cargo.toml` -- which is what `CARGO_PKG_VERSION` reports, so
+      # it is the version About shows and the version every log line carries. A
+      # hub whose Cargo.toml and tauri.conf.json disagree logs one number and
+      # compares against latest.json with another, which is two wrong answers
+      # for whoever is trying to work out what is installed.
+      #
+      # `cut_release.py --check` is the same list the bumper writes from, so
+      # the checker and the setter cannot drift apart.
+      - name: The tag and all six version fields agree
+        if: startsWith(github.ref, 'refs/tags/hub-v')
+        run: python tools/cut_release.py --check --expect "${GITHUB_REF#refs/tags/hub-v}"
+
   build:
     needs: check
     runs-on: windows-latest
@@ -103,22 +117,10 @@ jobs:
         working-directory: hub
         run: npm run build
 
-      # The tag is the version. Two places already claim one -- package.json and
-      # tauri.conf.json -- and a release whose three numbers disagree is a hub
-      # that reports the wrong version in About and compares wrongly against
-      # latest.json.
-      - name: The tag, package.json and tauri.conf.json agree
-        if: startsWith(github.ref, 'refs/tags/hub-v')
-        shell: bash
-        run: |
-          tag="${GITHUB_REF#refs/tags/hub-v}"
-          pkg=$(node -p "require('./hub/package.json').version")
-          conf=$(node -p "require('./hub/src-tauri/tauri.conf.json').version")
-          echo "tag=$tag package.json=$pkg tauri.conf.json=$conf"
-          if [ "$tag" != "$pkg" ] || [ "$tag" != "$conf" ]; then
-            echo "::error::the tag and the manifests disagree about the version"
-            exit 1
-          fi
+      # The version check that used to live here now runs in `check`, against
+      # all six fields instead of two -- earlier, on a cheap runner, and before
+      # twelve minutes of Windows build time are spent on a tree whose version
+      # numbers disagree.
 
       # tauri-action looks for a *draft* release with this tag and, finding
       # none, creates one. A release for the tag that is already published is
