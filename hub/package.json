@@ -1,6 +1,6 @@
 {
   "name": "hero-siege-toolkit-hub",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "One window that installs, launches and updates every tool in the Hero Siege Offline Toolkit.",
   "private": true,
   "license": "MIT",
