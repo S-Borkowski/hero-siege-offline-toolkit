@@ -4,7 +4,7 @@
 //! this file records is which directory a tool's `current.json` points at, and a
 //! half-written state file after a power cut would lose the whole installed set.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -101,6 +101,14 @@ pub struct HubState {
     pub last_check: Option<String>,
     /// Versions the user asked not to be updated past.
     pub pinned: BTreeMap<String, String>,
+    /// Tools starred in the Library, which puts them in their own row above
+    /// everything else.
+    ///
+    /// Ids rather than an ordering: the grid below is catalog order, and the
+    /// starred row is the same order with the rest taken out. A set also means
+    /// a tool that leaves the catalog leaves no ordering hole behind -- its id
+    /// simply matches nothing when the view is built.
+    pub favorites: BTreeSet<String>,
 }
 
 impl HubState {
@@ -141,6 +149,23 @@ impl HubState {
 
     pub fn is_installed(&self, id: &str) -> bool {
         self.installed.contains_key(id)
+    }
+
+    pub fn is_favorite(&self, id: &str) -> bool {
+        self.favorites.contains(id)
+    }
+
+    /// Star or unstar a tool, and say whether that changed anything.
+    ///
+    /// The answer is what stops a click that changes nothing from costing a
+    /// state write and a view rebuild -- starring is a click on a card, and the
+    /// card is in a grid people drag a cursor across.
+    pub fn set_favorite(&mut self, id: &str, favorite: bool) -> bool {
+        if favorite {
+            self.favorites.insert(id.to_string())
+        } else {
+            self.favorites.remove(id)
+        }
     }
 }
 
@@ -271,6 +296,35 @@ mod tests {
         let reloaded = HubState::load(&path);
         assert_eq!(reloaded.settings.theme, "ember");
         assert_eq!(reloaded.installed["forgepact"].version, "1.3.16");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn stars_survive_a_restart_and_a_second_star_is_not_a_change() {
+        let dir = temp_dir("favorites");
+        let path = dir.join("state.json");
+        let mut state = HubState::default();
+        assert!(state.set_favorite("forgepact", true));
+        // Already starred, so nothing to write and nothing to announce.
+        assert!(!state.set_favorite("forgepact", true));
+        state.save(&path).unwrap();
+
+        let mut reloaded = HubState::load(&path);
+        assert!(reloaded.is_favorite("forgepact"));
+        assert!(reloaded.set_favorite("forgepact", false));
+        assert!(!reloaded.is_favorite("forgepact"));
+        assert!(!reloaded.set_favorite("forgepact", false));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_state_file_written_before_stars_existed_still_loads() {
+        let dir = temp_dir("no-favorites-field");
+        let path = dir.join("state.json");
+        std::fs::write(&path, r#"{"settings":{"theme":"ember"},"installed":{}}"#).unwrap();
+        let state = HubState::load(&path);
+        assert_eq!(state.settings.theme, "ember");
+        assert!(state.favorites.is_empty());
         std::fs::remove_dir_all(&dir).ok();
     }
 

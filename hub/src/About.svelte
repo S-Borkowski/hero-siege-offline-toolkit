@@ -3,6 +3,18 @@
   import { invoke } from './bridge.js';
   import { library, act, ago, hubUpdate, checkHubUpdate, status } from './library.svelte.js';
   import { hubInstall, installHubUpdate, clearHubInstall } from './hub-update.svelte.js';
+  import { art } from './skin.svelte.js';
+
+  /**
+   * The toolkit's Discord.
+   *
+   * Opened through `open_url`, which hands it to the system browser and refuses
+   * anything that is not http(s) -- the hub never navigates its own webview
+   * somewhere else, and an invite is not a reason to start.
+   */
+  const DISCORD_URL = 'https://discord.gg/jcnVnJQNK';
+
+  let discordHovered = $state(false);
 
   let info = $state(null);
   /** So "this is the newest release" is only claimed after a check this session. */
@@ -72,6 +84,26 @@
 </section>
 
 <section>
+  <h3>Community</h3>
+  <p>
+    The toolkit's Discord is where releases get announced, bugs get reported and
+    the people who use these tools can be asked what they did about the thing
+    you are stuck on. Opens in your browser; the hub does not sign you in to
+    anything.
+  </p>
+  <button
+    class="discord"
+    type="button"
+    onmouseenter={() => (discordHovered = true)}
+    onmouseleave={() => (discordHovered = false)}
+    onclick={() => act('open_url', { url: DISCORD_URL })}
+  >
+    <img src={art(discordHovered ? 'discord_hover' : 'discord')} alt="" />
+    Join the Discord
+  </button>
+</section>
+
+<section>
   <h3>What this is</h3>
   <p>
     The Hero Siege Offline Toolkit is ten separate projects. This hub does not
@@ -120,6 +152,14 @@
   }
   button:hover:not(:disabled) { border-color: var(--edge-7); color: var(--bone-14); }
   button:disabled { opacity: 0.6; cursor: default; }
+  .discord {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    border-color: color-mix(in srgb, var(--arcane) 45%, var(--edge-3));
+  }
+  .discord img { width: 16px; height: 16px; }
+
   .result { margin-top: 10px; font-size: 12px; color: var(--arcane); }
   .result.bad { color: var(--rar-satanic); }
 </style>

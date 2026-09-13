@@ -54,7 +54,7 @@ chrome across heterogeneous tools is not achievable and is not attempted.
   tools\<id>\current.json    which version is live, and what to roll back to
   cache\downloads\           hash-verified before anything uses them
   cache\catalog.json         the last catalog that verified, with its signature
-  state.json                 installed set, settings, last check
+  state.json                 installed set, settings, starred tools, last check
   logs\hub.log
   bundle\                    optional offline-bundle payload, consulted first
 ```
@@ -220,13 +220,36 @@ with it.
 
 | Screen | What it is for |
 | --- | --- |
-| Library | The grid. Card per tool: name, one line, state chip, one primary button, overflow menu. |
+| Library | The grid. Card per tool: name, one line, state chip, one primary button, overflow menu, and a star in the corner. |
 | Updates | Everything with a newer release, *Update all*, and the staged queue with its reasons. |
 | Game | Whether Hero Siege and EAC are running — so the interlocks are legible rather than mysterious — and a way to start the game through HS Offline Launcher. |
 | Settings | Work offline, check on launch, auto-download, auto-install (nested), skin, developer mode. |
-| About | Versions, the catalog's signature, the log, and the hub's own updater. |
+| About | Versions, the catalog's signature, the log, the toolkit's Discord, and the hub's own updater. |
 | Downloads drawer | Per-file progress with *Verifying* as a step of its own. |
 | First run | What the hub will contact, before it contacts it. |
+
+### Starred tools
+
+A star on each card, persisted in `state.json` as a set of ids, lifts that tool
+into a **Starred** row above the rest of the grid. Ten tools is enough that the
+two or three anyone actually uses are worth putting first, and short enough that
+hiding the others would be worse than ordering them.
+
+Three things follow from it being a set of ids and not an ordering:
+
+- The starred row is catalog order with the rest taken out, so starring never
+  has to decide what a tool ranks *against*.
+- A star for an id that later leaves the catalog matches nothing and draws
+  nothing. It is not an error and it leaves no hole.
+- The split is applied **after** the filter, not instead of it. A star says
+  where a card sits, not that it ignores what the reader asked to see — so
+  *Updates* with one starred tool waiting shows that one on top, and shows
+  nothing at all if the starred tool is current.
+
+`set_favorite` refuses to star an id the catalog does not have, so a stale
+frontend cannot write one; unstarring is allowed for any id, because a tool that
+has since left the catalog must still be removable. A click that changes nothing
+returns without writing `state.json` or rebuilding the view.
 
 ### Two things about the sprites
 
@@ -399,6 +422,8 @@ checks a test cannot make, and because three of them found defects.
 | Verify files | Re-hashed the install against its manifest, offline |
 | `kind: "html"` | Opened in the browser rather than spawned |
 | Uninstall | Removed, back to *Not installed* |
+| Star two tools, unstar one | Cards moved into the *Starred* row and back; `state.json` held exactly the starred ids after each click (2026-09-13) |
+| *Join the Discord* | Invite resolves; opened through `open_url`, which hands it to the system browser (2026-09-13) |
 
 #### Stop kills a tree
 

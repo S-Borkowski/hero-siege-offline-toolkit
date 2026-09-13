@@ -22,6 +22,18 @@
     if (filter === 'available') return all.filter((t) => !t.installed_version);
     return all;
   });
+
+  /**
+   * Starred tools come out of the grid and into their own row above it.
+   *
+   * The split is applied after the filter rather than instead of it: a star
+   * says where a card sits, not that it ignores what the reader asked to see.
+   * So "Updates" with one starred tool waiting shows that one on top and the
+   * other updates below, and shows nothing at all if the starred tool is
+   * current.
+   */
+  const starred = $derived(shown.filter((t) => t.favorite));
+  const rest = $derived(shown.filter((t) => !t.favorite));
 </script>
 
 <header class="head">
@@ -59,11 +71,27 @@
 {#if shown.length === 0}
   <p class="empty">Nothing here yet.</p>
 {:else}
-  <div class="grid">
-    {#each shown as tool (tool.id)}
-      <ToolCard {tool} {onopen} />
-    {/each}
-  </div>
+  <!-- No headings at all until something is starred: with nothing in the top
+       row, "Everything else" is a heading over the whole library. -->
+  {#if starred.length > 0}
+    <h3 class="group">Starred</h3>
+    <div class="grid">
+      {#each starred as tool (tool.id)}
+        <ToolCard {tool} {onopen} />
+      {/each}
+    </div>
+  {/if}
+
+  {#if rest.length > 0}
+    {#if starred.length > 0}
+      <h3 class="group spaced">Everything else</h3>
+    {/if}
+    <div class="grid">
+      {#each rest as tool (tool.id)}
+        <ToolCard {tool} {onopen} />
+      {/each}
+    </div>
+  {/if}
 {/if}
 
 <style>
@@ -90,6 +118,15 @@
     cursor: pointer;
   }
   .filters button.on { color: var(--bone-13); border-color: var(--edge-7); background: var(--ground-7); }
+
+  .group {
+    margin: 0 0 10px;
+    font-size: 11px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--bone-3);
+  }
+  .group.spaced { margin-top: 22px; }
 
   .grid {
     display: grid;

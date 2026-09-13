@@ -2,7 +2,7 @@
   // One tool, as the Library grid draws it: mark, name, one line, a state chip,
   // one primary button, and an overflow menu for everything else.
   import { art } from './skin.svelte.js';
-  import { act, progressFor, bytes } from './library.svelte.js';
+  import { act, progressFor, bytes, setFavorite } from './library.svelte.js';
 
   let { tool, onopen } = $props();
 
@@ -146,6 +146,22 @@
     }
   }
 
+  /**
+   * Star or unstar.
+   *
+   * Deliberately not routed through `working`: that disables the primary
+   * button, and a star has nothing to do with whether this tool can be
+   * launched. The flag itself comes back on the next view rather than being
+   * toggled here, so what the star shows is what was actually written.
+   */
+  async function toggleStar() {
+    try {
+      await setFavorite(tool.id, !tool.favorite);
+    } catch {
+      /* shown on the banner */
+    }
+  }
+
   async function overflow(command, args = {}) {
     menuOpen = false;
     working = true;
@@ -159,7 +175,23 @@
   }
 </script>
 
-<article class="card skin skin-chip" style="--skin-src:url({art('chip_dark')})">
+<article class="card skin skin-chip" class:starred={tool.favorite} style="--skin-src:url({art('chip_dark')})">
+  <!-- Outside `.body` rather than in the heading beside the name: `.body` is
+       itself a button, and a button inside a button is not something the
+       browser will give you two separate clicks on. -->
+  <button
+    class="star"
+    type="button"
+    aria-pressed={tool.favorite}
+    aria-label={tool.favorite ? `Unstar ${tool.name}` : `Star ${tool.name}`}
+    title={tool.favorite ? 'Starred — kept at the top of the Library' : 'Star this to keep it at the top of the Library'}
+    onmouseenter={() => (hovered = 'star')}
+    onmouseleave={() => (hovered = '')}
+    onclick={toggleStar}
+  >
+    <img src={art(`star_${tool.favorite ? 'on' : 'off'}${hovered === 'star' ? '_hover' : ''}`)} alt="" />
+  </button>
+
   <button class="body" type="button" onclick={() => onopen?.(tool.id)}>
     <h3>{tool.name}</h3>
     <p class="summary">{tool.summary}</p>
@@ -253,6 +285,7 @@
   /* The nine-slice border already draws 11px of inset on every side, so the
      padding here is only what is left of the 14px the card wants inside it. */
   .card {
+    position: relative;
     display: flex;
     flex-direction: column;
     padding: 3px 3px 1px;
@@ -272,10 +305,33 @@
   }
   h3 {
     margin: 0;
+    /* Room for the star, which floats over this corner. */
+    padding-right: 26px;
     font-size: 14.5px;
     color: var(--bone-13);
     letter-spacing: 0.02em;
   }
+
+  /* Sits over the card's top-right corner. The nine-slice border draws 11px of
+     inset, so this is placed inside that rather than on top of the frame. */
+  .star {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 2;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    background: none;
+    border: none;
+    cursor: pointer;
+    display: grid;
+    place-items: center;
+    opacity: 0.5;
+  }
+  .star img { width: 18px; height: 18px; }
+  .star:hover, .card.starred .star { opacity: 1; }
+  .star:focus-visible { outline: 1px solid var(--edge-7); border-radius: 6px; opacity: 1; }
   .summary {
     margin: 0;
     font-size: 12px;

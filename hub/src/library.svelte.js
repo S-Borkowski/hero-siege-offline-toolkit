@@ -4,7 +4,7 @@
 // is decided in Rust and carried here as a field, so the `0.9.10` against
 // `0.9.8` comparison has exactly one implementation rather than one per screen.
 
-import { invoke, listen } from './bridge.js';
+import { invoke, listen, native } from './bridge.js';
 
 let view = $state(null);
 let loading = $state(true);
@@ -102,6 +102,23 @@ export function updates() {
  */
 export function hubUpdate() {
   return view?.hub_update ?? null;
+}
+
+/**
+ * Star or unstar a tool.
+ *
+ * The view comes back through `library-changed` like every other command that
+ * changes what a screen shows, so nothing is re-read here and the card does not
+ * keep its own copy of the flag.
+ *
+ * Except in the browser preview, which has no events to announce through -- the
+ * one call site that pays for its own re-read, as the note on `act` says such a
+ * call site should.
+ */
+export async function setFavorite(id, favorite) {
+  const answer = await act('set_favorite', { id, favorite });
+  if (!native) await refresh();
+  return answer;
 }
 
 /** Downloads that finished but are waiting on the game or the tool to close. */

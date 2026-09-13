@@ -146,6 +146,8 @@ pub struct ToolView {
     /// A copy started outside the hub, noticed by its port being taken.
     pub running_elsewhere: bool,
     pub staged: Option<state::Staged>,
+    /// Starred, which lifts the card into the Library's own row above the grid.
+    pub favorite: bool,
     pub source_available: bool,
     /// Built from `HUB_REPO`, so the interface never has to know which
     /// repository this build came from. None when the tool declares no guide.
@@ -248,6 +250,7 @@ fn build_view(hub: &Hub) -> Result<LibraryView, String> {
             // endpoint it does not.
             running_elsewhere: tracked.is_none() && (found.is_some() || answering),
             staged: hub_state.staged.get(&tool.id).cloned(),
+            favorite: hub_state.is_favorite(&tool.id),
             source_available,
             guide_url: catalog::guide_url(&tool.guide),
             tool: tool.clone(),
@@ -452,6 +455,36 @@ fn set_settings(
     let _ = app.emit("settings-changed", settings.clone());
     announce(&app, &hub);
     Ok(settings)
+}
+
+/// Star or unstar a tool, which is what decides the Library's top row.
+///
+/// Starring checks the catalog first, so a stale frontend cannot write an id
+/// nothing will ever match. Unstarring does not: a tool that has since left the
+/// catalog must still be removable, and the whole point of removing it is that
+/// it is no longer there.
+#[tauri::command(async)]
+fn set_favorite(
+    app: AppHandle,
+    hub: State<'_, Arc<Hub>>,
+    id: String,
+    favorite: bool,
+) -> Result<(), String> {
+    if favorite {
+        hub.tool(&id)?;
+    }
+    let changed = {
+        let mut guard = hub.state.lock().map_err(|_| "the state is busy".to_string())?;
+        guard.set_favorite(&id, favorite)
+    };
+    // Nothing moved, so nothing to write to disk and nothing for the grid to
+    // re-lay-out.
+    if !changed {
+        return Ok(());
+    }
+    hub.persist();
+    announce(&app, &hub);
+    Ok(())
 }
 
 /// Refresh the catalog from the network, if the settings permit it.
@@ -1108,6 +1141,7 @@ pub fn run() {
             library,
             get_settings,
             set_settings,
+            set_favorite,
             check_for_updates,
             check_hub_update,
             install_tool,
@@ -1211,6 +1245,45 @@ mod tests {
             tool.running_elsewhere,
             "a cached probe answer is what tells the card a copy is already up"
         );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The card draws its own star, so the flag has to reach it on the tool it
+    /// belongs to rather than as a list the frontend would have to cross-index.
+    #[test]
+    fn the_view_carries_the_star_on_the_tool_it_belongs_to() {
+        let (hub, root) = scratch_hub("favorites");
+        let id = hub.catalog.lock().unwrap().catalog.tools[0].id.clone();
+
+        let view = build_view(&hub).expect("the view should build");
+        assert!(
+            view.tools.iter().all(|t| !t.favorite),
+            "nothing is starred on a fresh install"
+        );
+
+        hub.state.lock().unwrap().set_favorite(&id, true);
+        let view = build_view(&hub).expect("the view should build");
+        let starred: Vec<&str> = view
+            .tools
+            .iter()
+            .filter(|t| t.favorite)
+            .map(|t| t.tool.id.as_str())
+            .collect();
+        assert_eq!(starred, vec![id.as_str()]);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A star for an id the catalog does not have is not an error and not a
+    /// row: it simply matches nothing when the view is built.
+    #[test]
+    fn a_star_for_a_tool_that_left_the_catalog_shows_up_nowhere() {
+        let (hub, root) = scratch_hub("favorites-ghost");
+        hub.state.lock().unwrap().set_favorite("no-such-tool", true);
+
+        let view = build_view(&hub).expect("the view should build");
+        assert!(view.tools.iter().all(|t| !t.favorite));
 
         let _ = std::fs::remove_dir_all(&root);
     }

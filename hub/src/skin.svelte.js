@@ -82,6 +82,17 @@ const backdrop = svg(`
   <rect width="160" height="100" fill="url(#b)"/>
 `, '0 0 160 100');
 
+// The Library's star, which is the one glyph that has to read as on or off at a
+// glance rather than as hovered or not. So it is drawn filled when it is on --
+// the other icons' hover colours are not a strong enough difference for a
+// setting the card is storing.
+const star = (on = false, hover = false) => svg(`
+  <path d="M32 14l6 13 14 2-10 10 2 14-12-7-12 7 2-14-10-10 14-2z"
+        fill="${on ? '#d6a64c' : 'none'}"
+        stroke="${on ? '#f4d38a' : hover ? '#f4d38a' : '#7d8a99'}"
+        stroke-width="4" stroke-linejoin="round"/>
+`);
+
 const transparent = svg('');
 
 const assets = {
@@ -129,6 +140,16 @@ const assets = {
   folder_hover: icon('M14 22h14l4 5h18v19H14z', true),
   more: icon('M22 32h.01M32 32h.01M42 32h.01'),
   more_hover: icon('M22 32h.01M32 32h.01M42 32h.01', true),
+
+  star_off: star(false),
+  star_off_hover: star(false, true),
+  star_on: star(true),
+  star_on_hover: star(true, true),
+
+  // The community link, drawn rather than fetched: the hub ships no bitmaps and
+  // makes no request to render its own interface.
+  discord: icon('M24 43c-4-1-7-4-8-8 0-6 2-11 5-15l4 2m15 21c4-1 7-4 8-8 0-6-2-11-5-15l-4 2M26 35h.01M38 35h.01'),
+  discord_hover: icon('M24 43c-4-1-7-4-8-8 0-6 2-11 5-15l4 2m15 21c4-1 7-4 8-8 0-6-2-11-5-15l-4 2M26 35h.01M38 35h.01', true),
 };
 
 export function art(name) {

@@ -32,6 +32,8 @@ const DEFAULT_SETTINGS = {
 };
 
 let browserSettings = { ...DEFAULT_SETTINGS };
+/** Starred tools, for as long as the preview tab is open. */
+const browserFavorites = new Set();
 
 /** The shape `library` returns, assembled from the catalog with nothing installed. */
 function browserLibrary() {
@@ -47,6 +49,7 @@ function browserLibrary() {
       running_pid: null,
       running_elsewhere: false,
       staged: null,
+      favorite: browserFavorites.has(tool.id),
       source_available: false,
       guide_url: tool.guide ? `https://github.com/${PREVIEW_REPO}/blob/main/${tool.guide}` : null,
     })),
@@ -78,6 +81,10 @@ const browserAnswers = {
   set_settings: ({ settings }) => {
     browserSettings = { ...browserSettings, ...settings };
     return browserSettings;
+  },
+  set_favorite: ({ id, favorite }) => {
+    if (favorite) browserFavorites.add(id);
+    else browserFavorites.delete(id);
   },
   game_status: () => ({ running: false, pid: null, exe_path: null, eac_running: false }),
   report: () => {},
