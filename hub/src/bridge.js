@@ -57,6 +57,9 @@ function browserLibrary() {
     settings: browserSettings,
     game: { running: false, pid: null, exe_path: null, eac_running: false },
     hub_repo: PREVIEW_REPO,
+    // The preview has no updater endpoint to ask, and an invented answer here
+    // would put a banner on the Updates screen that can never be acted on.
+    hub_update: null,
   };
 }
 

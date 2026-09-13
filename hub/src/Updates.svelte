@@ -1,5 +1,8 @@
 <script>
-  import { updates, staged, act, library, ago, checkForUpdates, status } from './library.svelte.js';
+  import {
+    updates, staged, act, library, ago, checkForUpdates, status, hubUpdate,
+  } from './library.svelte.js';
+  import { hubInstall, installHubUpdate } from './hub-update.svelte.js';
   import { art } from './skin.svelte.js';
   import ToolCard from './ToolCard.svelte';
 
@@ -9,6 +12,8 @@
 
   const pending = $derived(updates());
   const waiting = $derived(staged());
+  const hub = $derived(hubUpdate());
+  const install = $derived(hubInstall());
 
   async function updateAll() {
     updatingAll = true;
@@ -45,6 +50,27 @@
   </div>
 </header>
 
+<!-- The hub's own release, above the tools. It is the one update nothing else
+     in this window would ever mention, and the one that has to be applied by
+     hand, so it goes where the reader is already looking for updates rather
+     than only on the About screen. -->
+{#if hub}
+  <section class="hub">
+    <div>
+      <h3>The hub itself</h3>
+      <p>
+        <b>Hero Siege Toolkit v{hub.version}</b> — you are running v{hub.current_version}.
+      </p>
+      {#if install.message}
+        <p class="result" class:bad={install.phase === 'error'}>{install.message}</p>
+      {/if}
+    </div>
+    <button type="button" onclick={installHubUpdate} disabled={install.phase === 'downloading'}>
+      {install.phase === 'downloading' ? 'Downloading…' : 'Download and install'}
+    </button>
+  </section>
+{/if}
+
 {#if waiting.length}
   <section class="waiting">
     <h3>Waiting to be applied</h3>
@@ -64,7 +90,8 @@
 {/if}
 
 {#if pending.length === 0}
-  <p class="empty">Everything installed is up to date.</p>
+  <!-- "Everything" would be a lie with the hub's own update sitting above it. -->
+  <p class="empty">Every tool installed is up to date.</p>
 {:else}
   <div class="grid">
     {#each pending as tool (tool.id)}
@@ -89,6 +116,35 @@
   }
   .actions button:disabled { opacity: 0.6; cursor: default; }
   .actions .all { color: var(--bone-13); padding: 0 8px; min-height: 40px; }
+
+  .hub {
+    margin: 18px 0;
+    padding: 13px 16px;
+    border-radius: 11px;
+    border: 1px solid var(--edge-4);
+    background: var(--ground-4);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  .hub h3 { margin: 0 0 4px; font-size: 13px; color: var(--gold-1); }
+  .hub p { margin: 0; font-size: 12px; color: var(--bone-5); }
+  .hub b { color: var(--bone-11); font-weight: 600; }
+  .hub button {
+    flex: 0 0 auto;
+    background: var(--ground-7);
+    border: 1px solid var(--edge-3);
+    border-radius: 9px;
+    color: var(--bone-10);
+    font-size: 12px;
+    padding: 8px 14px;
+    cursor: pointer;
+  }
+  .hub button:hover:not(:disabled) { border-color: var(--edge-7); color: var(--bone-14); }
+  .hub button:disabled { opacity: 0.6; cursor: default; }
+  .hub .result { margin-top: 6px; color: var(--arcane); }
+  .hub .result.bad { color: var(--rar-satanic); }
 
   .waiting {
     margin: 18px 0;

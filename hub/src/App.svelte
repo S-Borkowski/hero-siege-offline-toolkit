@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { art } from './skin.svelte.js';
   import {
-    connect, refresh, library, status, updates, staged, busy,
+    connect, refresh, library, status, updates, staged, busy, hubUpdate,
   } from './library.svelte.js';
   import TitleBar from './TitleBar.svelte';
   import Library from './Library.svelte';
@@ -23,6 +23,13 @@
 
   const view = $derived(library());
   const state = $derived(status());
+  /**
+   * What the Updates badge counts. The hub's own release counts as one of them:
+   * it is an update waiting on the Updates screen like any other, and leaving
+   * it out of the count was the difference between a release being announced
+   * and a release being findable only by someone who went looking.
+   */
+  const pendingCount = $derived(updates().length + (hubUpdate() ? 1 : 0));
   /** Nothing is drawn until the first-run screen has been answered. */
   const needsFirstRun = $derived(view && !view.settings.first_run_done);
 
@@ -76,8 +83,8 @@
           >
             <img src={art(hovered === section.id || route === section.id ? `${section.icon}_hover` : section.icon)} alt="" />
             <span>{section.label}</span>
-            {#if section.id === 'updates' && updates().length}
-              <em class="count">{updates().length}</em>
+            {#if section.id === 'updates' && pendingCount}
+              <em class="count">{pendingCount}</em>
             {:else if section.id === 'updates' && staged().length}
               <em class="count staged">{staged().length}</em>
             {/if}

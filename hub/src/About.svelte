@@ -1,51 +1,30 @@
 <script>
   import { onMount } from 'svelte';
-  import { invoke, native } from './bridge.js';
-  import { library, act, ago } from './library.svelte.js';
+  import { invoke } from './bridge.js';
+  import { library, act, ago, hubUpdate, checkHubUpdate, status } from './library.svelte.js';
+  import { hubInstall, installHubUpdate, clearHubInstall } from './hub-update.svelte.js';
 
   let info = $state(null);
-  let updateState = $state({ phase: 'idle', message: '' });
+  /** So "this is the newest release" is only claimed after a check this session. */
+  let checkedHere = $state(false);
 
   const view = $derived(library());
+  const update = $derived(hubUpdate());
+  const install = $derived(hubInstall());
 
   onMount(() => {
     invoke('hub_info').then((i) => (info = i)).catch(() => {});
   });
 
   /**
-   * The hub updates itself through Tauri's updater plugin, which keeps
-   * `download()` and `install()` apart — so the auto-download and auto-install
-   * settings map onto it directly instead of needing staging of our own.
+   * The check itself lives in Rust, where the launch check runs it too — one
+   * implementation, and `work_offline` enforced in the place a hand-edited
+   * settings file cannot get past.
    */
-  async function checkHubUpdate() {
-    if (!native) {
-      updateState = { phase: 'error', message: 'Only the desktop app can update itself.' };
-      return;
-    }
-    updateState = { phase: 'checking', message: '' };
-    try {
-      const { check } = await import('@tauri-apps/plugin-updater');
-      const update = await check();
-      if (!update) {
-        updateState = { phase: 'current', message: 'This is the newest release.' };
-        return;
-      }
-      updateState = { phase: 'found', message: `v${update.version} is available.`, update };
-    } catch (e) {
-      updateState = { phase: 'error', message: String(e?.message ?? e) };
-    }
-  }
-
-  async function downloadAndInstall() {
-    const update = updateState.update;
-    if (!update) return;
-    updateState = { ...updateState, phase: 'downloading', message: 'Downloading…' };
-    try {
-      await update.downloadAndInstall();
-      updateState = { phase: 'done', message: 'Installed. Restart the hub to use it.' };
-    } catch (e) {
-      updateState = { phase: 'error', message: String(e?.message ?? e) };
-    }
+  async function check() {
+    clearHubInstall();
+    await checkHubUpdate();
+    checkedHere = true;
   }
 </script>
 
@@ -69,18 +48,26 @@
   <h3>Updating the hub itself</h3>
   <p>
     The tools update from the catalog. The hub updates from its own signed
-    release, and only when you ask.
+    release — checked on launch along with the catalog, and never installed
+    without you saying so.
   </p>
   <div class="row">
-    <button type="button" onclick={checkHubUpdate} disabled={updateState.phase === 'checking'}>
-      {updateState.phase === 'checking' ? 'Checking…' : 'Check for a hub update'}
+    <button type="button" onclick={check} disabled={status().checking}>
+      {status().checking ? 'Checking…' : 'Check for a hub update'}
     </button>
-    {#if updateState.phase === 'found'}
-      <button type="button" onclick={downloadAndInstall}>Download and install</button>
+    {#if update}
+      <button type="button" onclick={installHubUpdate} disabled={install.phase === 'downloading'}>
+        {install.phase === 'downloading' ? 'Downloading…' : `Download and install v${update.version}`}
+      </button>
     {/if}
   </div>
-  {#if updateState.message}
-    <p class="result" class:bad={updateState.phase === 'error'}>{updateState.message}</p>
+  {#if update}
+    <p class="result">v{update.version} is available. You are on v{update.current_version}.</p>
+  {:else if checkedHere && !status().checking}
+    <p class="result">This is the newest release.</p>
+  {/if}
+  {#if install.message}
+    <p class="result" class:bad={install.phase === 'error'}>{install.message}</p>
   {/if}
 </section>
 

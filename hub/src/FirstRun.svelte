@@ -39,7 +39,7 @@
 
     <h2>What it contacts, and nothing else</h2>
     <ul class="hosts">
-      <li><code>github.com</code> — the signed catalog, on a release tag</li>
+      <li><code>github.com</code> — the signed catalog and the hub's own release, both on release tags</li>
       <li><code>objects.githubusercontent.com</code> — the release files themselves</li>
     </ul>
     <p class="fine">
@@ -51,7 +51,7 @@
     <div class="choices">
       <label>
         <input type="checkbox" bind:checked={checkOnLaunch} />
-        <span>Check for updates when the hub starts <em>one request for the catalog</em></span>
+        <span>Check for updates when the hub starts <em>the catalog, and the hub's own release</em></span>
       </label>
       <label>
         <input type="checkbox" bind:checked={autoDownload} />

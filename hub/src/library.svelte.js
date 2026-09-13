@@ -92,6 +92,17 @@ export function updates() {
   return tools().filter((t) => t.update_available);
 }
 
+/**
+ * The hub's own newer release, or null.
+ *
+ * Decided in Rust like `update_available` is, and for the same reason: the
+ * comparison against `latest.json` has one implementation, and every screen
+ * that wants to mention it reads the same field.
+ */
+export function hubUpdate() {
+  return view?.hub_update ?? null;
+}
+
 /** Downloads that finished but are waiting on the game or the tool to close. */
 export function staged() {
   return tools().filter((t) => t.staged);
@@ -120,6 +131,34 @@ export async function checkForUpdates() {
     view = await invoke('check_for_updates');
   } catch (e) {
     notify('error', e?.message ?? e);
+  }
+  // Two requests to two places: the catalog for the ten tools, the release page
+  // for the hub. Deliberately not one call -- a catalog that failed is no
+  // reason to skip the hub's own release, and the reverse cost a release going
+  // unnoticed entirely.
+  try {
+    await invoke('check_hub_update');
+  } catch (e) {
+    notify('error', e?.message ?? e);
+  } finally {
+    checking = false;
+  }
+}
+
+/**
+ * Check only the hub's own release.
+ *
+ * The backend announces the result, so the view updates through
+ * `library-changed`; the return value is for a caller that wants to say
+ * something about this particular check.
+ */
+export async function checkHubUpdate() {
+  checking = true;
+  try {
+    return await invoke('check_hub_update');
+  } catch (e) {
+    notify('error', e?.message ?? e);
+    return null;
   } finally {
     checking = false;
   }

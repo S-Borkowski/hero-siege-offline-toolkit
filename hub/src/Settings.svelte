@@ -48,7 +48,11 @@
       />
       <span>
         <b>Check for updates on launch</b>
-        <em>One request to {library()?.catalog_source === 'remote' ? 'GitHub' : 'GitHub'} for the signed catalog. Nothing is downloaded or installed by this alone.</em>
+        <em>
+          Two requests to GitHub: the signed catalog, which is how the ten tools
+          are compared, and the hub's own release. Nothing is downloaded or
+          installed by this alone.
+        </em>
       </span>
     </label>
   </section>

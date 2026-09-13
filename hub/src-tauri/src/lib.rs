@@ -22,6 +22,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_updater::UpdaterExt;
 
 use catalog::{LoadedCatalog, Source};
 use paths::Layout;
@@ -35,6 +36,12 @@ pub struct Hub {
     pub catalog: Mutex<LoadedCatalog>,
     /// Tool id -> PID of the process this hub started.
     pub running: Mutex<BTreeMap<String, u32>>,
+    /// The hub's own newer release, if the last check found one.
+    ///
+    /// Held here rather than in `state.json`: it is an answer about a remote
+    /// release, and a cached "0.1.1 is available" surviving a restart into an
+    /// already-updated hub would be a notice nobody can clear.
+    pub hub_update: Mutex<Option<HubUpdate>>,
     /// The checkout this hub was built in, if it can still be found. Developer
     /// mode runs tools out of the submodules under it.
     pub repo_root: Option<PathBuf>,
@@ -88,6 +95,21 @@ pub struct HubInfo {
     pub elevated: bool,
 }
 
+/// A newer release of the hub itself, as announced by `latest.json`.
+///
+/// The ten tools are compared against the signed catalog; the hub is compared
+/// against its own updater endpoint. Two different sources, but the interface
+/// says "an update is available" the same way for both, so this rides in
+/// `LibraryView` beside the tools rather than being asked for separately.
+/// Deliberately not carrying the release body: every hub release ships the same
+/// boilerplate about SmartScreen, so showing it would be a paragraph of noise
+/// on top of the one fact that differs, which is the version number.
+#[derive(Debug, Clone, Serialize)]
+pub struct HubUpdate {
+    pub version: String,
+    pub current_version: String,
+}
+
 /// One row of the Library grid, with everything the card needs already decided.
 ///
 /// Assembled here rather than in Svelte so that "is this an update" has exactly
@@ -126,6 +148,8 @@ pub struct LibraryView {
     pub settings: state::Settings,
     pub game: game::GameStatus,
     pub hub_repo: String,
+    /// None when the last check found nothing newer, or found nothing at all.
+    pub hub_update: Option<HubUpdate>,
 }
 
 fn build_view(hub: &Hub) -> Result<LibraryView, String> {
@@ -217,6 +241,7 @@ fn build_view(hub: &Hub) -> Result<LibraryView, String> {
         settings: hub_state.settings,
         game,
         hub_repo: catalog::HUB_REPO.to_string(),
+        hub_update: hub.hub_update.lock().ok().and_then(|u| u.clone()),
     })
 }
 
@@ -313,6 +338,27 @@ fn check_for_updates(app: AppHandle, hub: State<'_, Arc<Hub>>) -> Result<Library
     let view = build_view(&hub)?;
     let _ = app.emit("library-changed", view.clone());
     Ok(view)
+}
+
+/// Check the hub's own release, on demand.
+///
+/// Separate from `check_for_updates` rather than folded into it: they are two
+/// requests to two places, and keeping them apart lets the interface say which
+/// one it is waiting on instead of showing one spinner for both.
+#[tauri::command]
+fn check_hub_update(app: AppHandle, hub: State<'_, Arc<Hub>>) -> Result<Option<HubUpdate>, String> {
+    let settings = hub.settings();
+    if !settings.may_reach_network() {
+        return Err(if settings.work_offline {
+            "Work offline is on. Turn it off in Settings to check for updates.".into()
+        } else {
+            "The hub has not finished its first run yet.".into()
+        });
+    }
+
+    let update = refresh_hub_update(&hub, &app);
+    announce(&app, &hub);
+    Ok(update)
 }
 
 #[tauri::command]
@@ -596,11 +642,65 @@ fn apply_staged(app: &AppHandle, hub: &Arc<Hub>) {
     }
 }
 
+/// Ask the updater endpoint whether a newer hub has been released.
+///
+/// Blocking, so it belongs on a worker thread or in a command the interface has
+/// already disabled its button for.
+///
+/// Deliberately independent of the catalog check. They are two different files
+/// on two different release pages, and the hub's own update is the one a player
+/// has no other way to find out about -- so a catalog fetch that fails must not
+/// take it down with it.
+fn refresh_hub_update(hub: &Hub, app: &AppHandle) -> Option<HubUpdate> {
+    let found = match app.updater() {
+        Ok(updater) => match tauri::async_runtime::block_on(updater.check()) {
+            Ok(found) => found,
+            Err(error) => {
+                // Offline, a release page with no latest.json, a signature that
+                // does not verify against the built-in public key. None of
+                // these is worth interrupting anyone over, and all of them are
+                // worth a line in the log.
+                hub.log.info(format!("hub update check: {error}"));
+                return hub.hub_update.lock().ok().and_then(|u| u.clone());
+            }
+        },
+        Err(error) => {
+            hub.log.error(format!("hub update check: {error}"));
+            return None;
+        }
+    };
+
+    let update = found.map(|update| HubUpdate {
+        version: update.version.clone(),
+        current_version: update.current_version.clone(),
+    });
+
+    match &update {
+        Some(update) => hub.log.info(format!(
+            "hub update available: {} (running {})",
+            update.version, update.current_version
+        )),
+        None => hub.log.info("hub update check: this is the newest release"),
+    }
+
+    if let Ok(mut guard) = hub.hub_update.lock() {
+        *guard = update.clone();
+    }
+    update
+}
+
 /// The launch check, plus whatever auto-download/auto-install allow.
 fn startup_check(app: AppHandle, hub: Arc<Hub>) {
     let settings = hub.settings();
     if !settings.may_reach_network() || !settings.check_on_launch {
         return;
+    }
+
+    // Before the catalog, and announced on its own, because the catalog fetch
+    // below returns early on any failure -- and the hub's own update went
+    // unmentioned entirely until it was checked here.
+    if refresh_hub_update(&hub, &app).is_some() {
+        announce(&app, &hub);
     }
 
     let Ok((payload, signature)) = catalog::fetch_remote(Duration::from_secs(30)) else {
@@ -779,6 +879,7 @@ pub fn run() {
         state: Mutex::new(hub_state),
         catalog: Mutex::new(loaded),
         running: Mutex::new(BTreeMap::new()),
+        hub_update: Mutex::new(None),
         repo_root,
         elevated,
         log: logger,
@@ -815,6 +916,7 @@ pub fn run() {
             get_settings,
             set_settings,
             check_for_updates,
+            check_hub_update,
             install_tool,
             uninstall_tool,
             rollback_tool,
