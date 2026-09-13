@@ -9,10 +9,12 @@
 # cannot move the hub repository's default branch.
 #
 # Why this is a separate file from `notify-hub.example.yml`: that template sends
-# `submodule-pointer-bump` when a commit lands, and lives on a branch that has
-# not merged yet. Keeping the two apart means a repository can install either,
-# both, or neither. If you already have `notify-hub.yml`, add the job below to
-# it rather than keeping two workflows.
+# `submodule-updated` when a commit lands on the default branch, which the hub
+# answers by opening a pull request that bumps the recorded submodule pointer.
+# Different event, different receiving workflow, different reason to fire.
+# Keeping the two apart means a repository can install either, both, or
+# neither. If you already have `notify-hub.yml`, add the job below to it rather
+# than keeping two workflows.
 #
 # The repository this notifies must be the one the installed hubs read their
 # catalog from -- `HUB_REPO` in `hub/src-tauri/src/catalog.rs`, which a release
@@ -23,10 +25,19 @@
 #
 # Setup, once per tool repository:
 #
-#   1. Create a fine-grained personal access token with
-#      `Contents: read` on the hub repository — nothing else. A
-#      `repository_dispatch` needs no more than that.
-#   2. Add it as the repository secret `HUB_DISPATCH_TOKEN`.
+#   1. Create a fine-grained personal access token whose repository access is
+#      only the hub repository, and whose only permission is
+#      `Contents: Read and write` — nothing else. (A classic token needs the
+#      `repo` scope, which is broader than necessary.)
+#
+#      Write, not read: `POST /repos/{owner}/{repo}/dispatches` is documented
+#      under Contents *write*, and a read-only token gets 403 "Resource not
+#      accessible by personal access token". An earlier version of this file
+#      said read; it was wrong.
+#   2. Add it as the repository secret `HUB_DISPATCH_TOKEN`, under
+#      Settings > Secrets and variables > Actions in this repository. This is
+#      the same secret name `notify-hub.example.yml` uses, so one token can
+#      serve both workflows.
 #   3. Commit this file.
 #
 # Publishing a release with no token set simply does nothing: the step is
