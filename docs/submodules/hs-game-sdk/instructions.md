@@ -1,0 +1,353 @@
+# HS Game SDK Module Development Instructions
+
+## Module Overview & Metadata
+
+`hs-game-sdk` is the centralized, multi-language SDK and metadata library providing GameMaker objects, scripts, assets, stat IDs, and runtime struct definitions extracted directly from `Hero_Siege.exe` and `data.win`.
+
+It serves as the unified source of truth for:
+* **C++ plugins** (`ForgePact/plugin`, `HS-Offline-Tracker/aurie-producer`, `hs-stat-forge`)
+* **Python tools** (`hero-siege-item-editor`, `HSSaveEditor`, `HS-Offline-Launcher`)
+* **TypeScript / Web interfaces** (`HSCraftSim`, `HS-Offline-Tracker/src`)
+
+| Item | Value |
+| --- | --- |
+| **Directory** | `hs-game-sdk/` |
+| **Languages** | Python 3.10+, C++20, TypeScript / JavaScript |
+| **Output Formats** | Python package (`hs_game_sdk`), C++ headers (`include/hs_game_sdk/`), TypeScript package (`@hero-siege/sdk`), JSON dumps |
+| **Supported Game Build** | Hero Siege Season 10 (Steam / Offline) |
+
+---
+
+## Architecture & Directory Map
+
+```text
+hs-game-sdk/
+├── data/                       # Extracted JSON databases (ignored by git for clean distribution)
+│   ├── manifest.json           # Binary metadata and hashes
+│   ├── objects.json            # 6,016 GameMaker Object definitions, indexes, parent hierarchy
+│   ├── scripts.json            # 6,254 GML Script names and asset indexes
+│   ├── sprites.json            # 32,270 Sprite indexes and names
+│   ├── rooms.json              # 306 Room indexes and names
+│   └── sounds.json             # 2,718 Sound indexes and names
+├── curated/                    # Hand-verified game knowledge (NOT gitignored - tracked)
+│   └── satanic_zone.json       # Satanic Zone buff/debuff ids/names/descriptions + Controller_obj var names
+├── python/                     # Python SDK package
+│   ├── hs_game_sdk/
+│   │   ├── objects.py          # GameObject enum & index maps
+│   │   ├── scripts.py          # GameScript enum & index maps
+│   │   ├── rooms.py            # GameRoom enum & index maps
+│   │   ├── sprites.py          # GameSprite enum & index maps
+│   │   ├── sounds.py           # GameSound enum & index maps
+│   │   ├── stats.py            # StatId enum, proc bundles (116/117/118), buff IDs (332)
+│   │   ├── structs.py          # Dataclasses: ItemDefinitionStruct, ItemStatStruct, etc.
+│   │   ├── player.py           # EquipmentSlot enums, PlayerEquipment, container scanners
+│   │   ├── mod_registry.py     # ModDefinition & ModRegistry for declarative mods
+│   │   └── satanic_zone.py     # SATANIC_BUFFS/SATANIC_DEBUFFS tuples, generated from curated/satanic_zone.json
+│   ├── pyproject.toml
+│   └── setup.py
+├── cpp/                        # C++ Header SDK for YYToolkit / Aurie Plugins
+│   └── include/hs_game_sdk/
+│       ├── objects.hpp         # enum class GameObject & GetObjectName()
+│       ├── scripts.hpp         # constexpr string_view script names & indexes
+│       ├── rooms.hpp           # enum class GameRoom
+│       ├── stats.hpp           # Stat constants & proc families
+│       ├── yytk_helpers.hpp    # Typed helper wrappers for YYTKInterface
+│       ├── hooks.hpp           # InstallScriptHook: table swap + inline detour, repeat-safe
+│       ├── player.hpp          # Player discovery; relic scanners (positive ID only)
+│       ├── satanic_zone.hpp    # HeroSiege::SatanicZone::kBuffs/kDebuffs, generated from curated/satanic_zone.json
+│       └── hs_game_sdk.hpp     # Main aggregate header
+├── ts/                         # TypeScript / ESM SDK for web and UI modules
+│   ├── src/
+│   │   ├── objects.ts
+│   │   ├── scripts.ts
+│   │   ├── rooms.ts
+│   │   ├── stats.ts
+│   │   ├── player.ts
+│   │   ├── satanic_zone.ts     # SATANIC_BUFFS/SATANIC_DEBUFFS, generated from curated/satanic_zone.json
+│   │   └── index.ts
+│   └── package.json
+└── (Configured via repository root .gitignore & README.md)
+```
+
+**`data/` vs `curated/`:** `data/` is mechanically extracted straight from `Hero_Siege.exe`/`data.win`
+by `tools/extract_and_generate_sdk.py` and is gitignored (see Safety section below) - it never leaves
+a contributor's machine. `curated/` is hand-verified game knowledge that no extractor can derive (item
+names/effect text that requires playing the game and cross-checking, not just walking a symbol table)
+and IS tracked in git, generated into the same three language targets by a small sibling script,
+`tools/generate_satanic_zone_sdk.py` (run it after editing a `curated/*.json` file; it is not part of
+`extract_and_generate_sdk.py`'s pipeline since it has nothing to extract from a binary). `curated/`
+is the pattern to extend for any future hand-verified, non-mechanically-extracted domain knowledge a
+submodule needs to share - see `ForgePact/docs/satanic-zone-mods-research.md` for how `satanic_zone.json`
+came to exist.
+
+---
+
+## OBJT Record Layout & the Object Parent Hierarchy
+
+`objects.json` is extracted by walking the `OBJT` chunk's pointer list. This build's
+runtime inserts a `managed` flag right after `visible`, which pushes every later field
+4 bytes further than the pre-2022.5 layout most references describe. Offsets relative
+to an object's record pointer, as measured against `data.win`
+(`2fc37b1b…`, GEN8 bytecode version 17, `UILR`/`PSEM`/`PSYS`/`FEAT` chunks present):
+
+| Offset | Field | Notes |
+| --- | --- | --- |
+| `+0` | name | string pointer |
+| `+4` | `sprite_index` | `-1` = no sprite |
+| `+8` | `visible` | bool32 |
+| `+12` | `managed` | bool32 — **the inserted field**; `true` for all 6,016 objects |
+| `+16` | `solid` | bool32 |
+| `+20` | `depth` | i32 — `0` for every object in this build (depth is layer-driven) |
+| `+24` | `persistent` | bool32 |
+| `+28` | `parent_index` | i32 **object** index, `-100` = root object |
+| `+32` | `mask_index` | i32 **sprite** index, `-1` = collide using `sprite_index` |
+| `+36` | `uses_physics` | bool32, followed by the physics block and the 15 event lists |
+
+Anchors that pin this layout, in case it has to be re-derived for a future game build:
+
+* `+48`/`+52`/`+64`/`+72` hold the GameMaker physics defaults `0.5`, `0.1`, `0.1`, `0.2`.
+* Parsing the tail from `+68` (physics vertex count) yields exactly 15 event lists whose
+  pointers are in-chunk and ascending for all 6,016 records, and no record's parsed end
+  overruns the next record's start.
+* `+28` is never anything but `-100` or a valid object index, and grouping by it produces
+  the families the names imply (`Collision_Prop_obj` 1,495 children, `Visual_Parent_obj` 960,
+  `Player_Damage_Parent_obj` 582, …), with 840 roots and no cycles.
+* `+32` reaches past the object table into the sprite table and resolves to the game's own
+  mask sprites (`Abandoned_Mine_Entrance_obj` → `Abandoned_Mine_Mask_spr`).
+
+`tests/test_object_hierarchy.py` asserts all of the above, including the three-level chain
+`Quest_Act_01_Coffee_Beans_obj → Quest_Object_Parent_obj → Pickup_Parent_obj`. Before
+2026-09-10 the extractor used the unshifted offsets, so `parent_index` carried the
+`persistent` flag (`0`/`1` only) and `mask_index` carried the parent index; any consumer
+written against a `data/objects.json` from before that date needs regenerating.
+
+### Hierarchy lookups in the bindings
+
+All three targets expose the parent/mask tables plus lookup helpers, so a hook can ask
+"is this instance an enemy?" instead of enumerating indices (the GML `object_is_ancestor`
+relation):
+
+```python
+from hs_game_sdk import get_parent_index, get_child_indices, is_descendant_of
+
+is_descendant_of("Quest_Act_01_Coffee_Beans_obj", "Pickup_Parent_obj")  # True
+len(get_child_indices("Collision_Prop_obj"))                            # 1495
+```
+
+```cpp
+using namespace HeroSiege::Objects;
+static_assert(IsDescendantOf(GameObject::Quest_Act_01_Coffee_Beans_obj,
+                             GameObject::Pickup_Parent_obj));
+std::vector<int32_t> props = GetChildObjects(static_cast<int32_t>(GameObject::Collision_Prop_obj));
+```
+
+```typescript
+import { GameObject, isDescendantOf, getChildObjects } from '@hero-siege/sdk';
+```
+
+Python: `OBJECT_PARENT_INDEX`, `OBJECT_MASK_SPRITE_INDEX`, `NO_PARENT`, `NO_MASK`,
+`get_parent_index`, `get_ancestor_indices`, `get_child_indices`, `get_descendant_indices`,
+`is_descendant_of`, `get_mask_sprite_index`. C++: `kObjectParents`, `kObjectMasks`,
+`kNoParent`, `kNoMask`, `GetParentObject`, `GetMaskSpriteIndex`, `IsDescendantOf`,
+`GetChildObjects`, `GetDescendantObjects` (the first three are `constexpr`, so ancestry
+checks can be `static_assert`ed). TypeScript mirrors the Python names in camelCase.
+
+---
+
+## Integration Workflow Across Submodules
+
+### 1. Python Submodules (`hero-siege-item-editor`, `HSSaveEditor`, etc.)
+Install in editable mode:
+```powershell
+py -3 -m pip install -e hs-game-sdk/python
+```
+Or import directly:
+```python
+from hs_game_sdk import GameObject, GameScript, StatId, PROC_FAMILIES, ItemDefinitionStruct
+```
+
+### 2. C++ Submodules (`ForgePact/plugin`, `HS-Offline-Tracker/aurie-producer`)
+Add `hs-game-sdk/cpp/include` to the include search path and include the aggregate header:
+```cpp
+#include <hs_game_sdk/hs_game_sdk.hpp>
+
+using namespace HeroSiege;
+
+void ExampleHook() {
+    auto obj = Objects::GameObject::Enemy_Parent_obj;
+    std::string_view script = Scripts::gml_Script_DropItem;
+}
+```
+
+### 3. TypeScript Submodules (`HSCraftSim`, `HS-Offline-Tracker` UI)
+Import from the module:
+```typescript
+import { GameObject, GameScripts, StatId } from '@hero-siege/sdk';
+```
+
+---
+
+## Setup, Extraction & Test Command Reference
+
+| Command | Working Directory | Purpose | Verification Status |
+| --- | --- | --- | --- |
+| `py -3 tools/extract_and_generate_sdk.py --game-bin "<path-to-game-bin>"` | Workspace Root | Re-extract symbols from `data.win` and regenerate all SDK bindings | Verified |
+| `py -3 tools/generate_satanic_zone_sdk.py` | Workspace Root | Regenerate `satanic_zone.py`/`.hpp`/`.ts` from `hs-game-sdk/curated/satanic_zone.json` (hand-edited, not extracted) | Verified 2026-09-10 |
+| `py -3 -m unittest discover -s tests` | Workspace Root | Run the SDK test suite. Passes in a clean checkout; extraction- and compiler-dependent suites skip (see below) | Verified 2026-09-12 |
+| `py -3 -m unittest tests.test_cpp_sdk -v` | Workspace Root | Compile and run the C++ relic/hook behavioural tests against the stubbed YYToolkit surface | Verified 2026-09-12 |
+| `py -3 -m pip install -e hs-game-sdk/python` | Workspace Root | Install Python SDK in development mode | Verified |
+
+### Which tests need a game install, and which do not
+
+`py -3 -m unittest discover -s tests` passes from a clean checkout with no game
+installed and no build tools. Anything that cannot run there **skips** rather than
+fails, because `hs-game-sdk/data/` is gitignored extraction output that no
+contributor can be assumed to have:
+
+| Suite | Needs | Behaviour without it |
+| --- | --- | --- |
+| `test_sdk_python.py`, `test_expanded_sdk.py`, `test_relic_identification.py` | nothing | always runs |
+| `test_sdk_all.py` → `TestSdkArtifacts` | nothing | always runs |
+| `test_sdk_all.py` → `TestExtractedDataArtifacts` | `hs-game-sdk/data/` | skips |
+| `test_object_hierarchy.py` → `TestObjectParentChain` | nothing (reads the tracked bindings) | always runs |
+| `test_object_hierarchy.py` → `TestObjectsJsonMatchesBindings` | `hs-game-sdk/data/` | skips |
+| `test_extractor_layout.py` | nothing (builds a synthetic `data.win`) | always runs |
+| `test_cpp_sdk.py` | Windows + MSVC or g++/clang++ | skips |
+
+`test_extractor_layout.py` is how the OBJT offsets stay verifiable without the
+game: it writes a tiny GameMaker IFF file by hand, with each field at its
+documented offset and a distinct value, so a one-field shift fails immediately.
+
+`test_cpp_sdk.py` compiles `tests/cpp/test_sdk_player_hooks.cpp` against the
+**unchanged** production headers, with the YYToolkit and Aurie surfaces supplied
+by `tests/cpp/stubs/`. Because the SDK detects YYToolkit with
+`__has_include(<YYToolkit/YYTK_Shared.hpp>)`, putting the stubs on the include
+path is enough to compile the real code paths and drive them with controlled
+responses - no Aurie runtime, no DLL in the game, no live game.
+
+---
+
+## Runtime helper semantics
+
+### `Player::GetOwnedRelicLevels` / `GetMaxedRelicIds` — relic identification
+
+An item counts as a relic only on **positive identification**: rarity tier 16 via
+`c` / `cls` / `itemType`, or the relic-specific `relicLevel` field. Level is read
+only from `o`, `level` and `relicLevel`.
+
+A level-shaped field is not evidence of relic-ness, and this was a real defect
+(REPORTED 2026-09-12 against PR #3): the scanner accepted `isRelic || level > 0`,
+so the ordinary item `{b:15, c:8, level:100}` was reported as maxed relic 15.
+`ForgePact`'s `RelicFilterMod` calls `GetMaxedRelicIds` directly, so that false
+positive could suppress an unrelated relic drop. `p` is a star upgrade count and
+stacks carry `amount`/`count`/`qty`, so the old field list both invented relics
+and inflated levels past the maxed threshold.
+
+Container shape matters too, via `Player::ContainerKind`:
+
+| Kind | Containers | A bare number means |
+| --- | --- | --- |
+| `General` | `equippedItems`, `inventory`, `bags` | nothing - item structs only |
+| `RelicTable` | `relic_levels`, `relics`, `relic_tab`, `relic_array`, `pRelics`, `relic_inventory`, `relics_collected`, `inventory_relic_tab`, `relicPage` | `relic id -> level` |
+
+#### The contract shared with the Python SDK
+
+Both scanners must accept exactly the same layouts. REPORTED 2026-09-12 by
+origin's second review of PR #3: C++ recognised `cls` and read numeric arrays out
+of `relic_levels` while Python did neither, so on identical input
+`{"relic_levels":[0,0,10]}` C++ said `{2:10}` and Python said `{}`. They now
+declare one contract, as enumerable constants on both sides:
+
+| Contract | Value | C++ | Python |
+| --- | --- | --- | --- |
+| Id fields | `b`, `relicId` | `kRelicIdFields` | `RELIC_ID_FIELDS` |
+| Rarity-tier fields (`== 16` means relic) | `c`, `cls`, `itemType` | `kRelicTierFields` | `RELIC_TIER_FIELDS` |
+| Level fields (highest present wins) | `o`, `level`, `relicLevel` | `kRelicLevelFields` | `RELIC_LEVEL_FIELDS` |
+| Relic-only field (presence means relic) | `relicLevel` | `kRelicOnlyField` | `RELIC_ONLY_FIELD` |
+| General containers | see table above | `kGeneralContainerFields` | `GENERAL_CONTAINER_FIELDS` |
+| Relic containers | see table above | `kRelicContainerFields` | `RELIC_CONTAINER_FIELDS` |
+| Plausible id range | `0 .. 159` | `kRelicIdLimit` | `RELIC_ID_LIMIT` |
+| Maxed at | `10` | `kMaxedRelicLevel` | `MAXED_RELIC_LEVEL` |
+| Recursion budget | `5` | `kMaxScanDepth` | `MAX_SCAN_DEPTH` |
+| Array read cap | `512` | `kMaxScannedArrayLength` | `MAX_SCANNED_ARRAY_LENGTH` |
+
+They are enumerable rather than inline literals for one reason: the C++ harness
+prints them and `tests/test_cpp_sdk.py` asserts the Python tuples match field for
+field, so editing one side without the other fails a test instead of drifting
+silently. The three reported cases are in that shared suite too, negative control
+included.
+
+**One difference is deliberate: how each side walks its input.** C++ reads named
+variables off a live `CInstance` and can only follow what it looks up - the `data`
+field and array elements - because YYToolkit gives it no way to enumerate a
+struct's keys. Python walks every key of a decoded save-file tree. So
+`{"inventory": {"bag1": [relic]}}` resolves in Python and has no C++ equivalent
+to resolve. The contract above is about *which layouts are recognised*; the
+traversal differs because the inputs do. There is no TypeScript scanner -
+`ts/src/player.ts` only carries `EquipmentSlot` - so the contract covers exactly
+these two implementations.
+
+### `Hooks::InstallScriptHook` — both call routes, and safe to install twice
+
+```cpp
+static PFUNC_YYGMLScript g_origDropRelic = nullptr;  // static, zero-initialised
+
+HeroSiege::Hooks::ScriptHookOptions options;
+options.selfModule = g_ArSelfModule;      // required for native interception
+options.hookId = "forgepact_drop_relic";  // required, unique per detour
+const auto result = HeroSiege::Hooks::InstallScriptHook(
+    yytk, "gml_Script_DropRelic", &Hook_DropRelic, &g_origDropRelic, options);
+if (!result.IsNative()) {
+    Log(std::string("table-only: ") + result.note);  // surface it, do not ignore it
+}
+```
+
+A script-table swap alone catches only calls the game routes through the table;
+compiled GML also calls straight into the function's address. So the installer
+does **both** - the table swap and an inline detour - and `*outOriginalFunc`
+becomes the trampoline, reaching the real original from either route without
+re-entering the hook. See the "Prove the Instrument" rule in
+[`agents.md`](../../../agents.md).
+
+Check `result.kind`:
+
+| Kind | Meaning |
+| --- | --- |
+| `Native` | both routes covered |
+| `TableOnly` | the detour could not be installed; `note` says why, and direct compiled-GML calls bypass the hook |
+| `AlreadyInstalled` | a hook was already present; the recorded original was left alone |
+| `Failed` | nothing was installed |
+
+Repeat installation is safe, which matters because a shared chokepoint gets hooked
+from more than one call site. The detour is attempted only on the first install
+(`!*outOriginalFunc`) - the one moment the table still holds the game's own
+function - and the table entry must be executable code inside the game module, or
+it is not ours to patch. Pass a **static, zero-initialised** original pointer: it
+is how the installer knows which install is the first.
+
+`InstallScriptHookTableOnly` is a deliberately limited variant, named so the
+limitation is visible at the call site. It exists for research - observing
+table-routed calls without patching code - and still preserves the original
+across repeat installs. It is not what a shipped gameplay hook should use.
+
+---
+
+### Never hand-edit a generated file
+
+`tools/extract_and_generate_sdk.py` rewrites **every** file under `python/hs_game_sdk/`,
+`cpp/include/hs_game_sdk/` and `ts/src/` on each run — including the ones with no extracted
+content in them (`__init__.py`, `hs_game_sdk.hpp`, `yytk_helpers.hpp`, `index.ts`), which come
+from string templates inside the generator. Editing those files in place works right up until
+the next extraction silently reverts them. Change the template in the generator instead, then
+re-run it; regeneration is idempotent, so a second run must produce no diff.
+
+`satanic_zone.py`/`.hpp`/`.ts` are the exception: they belong to
+`tools/generate_satanic_zone_sdk.py` and are regenerated from `curated/satanic_zone.json`.
+
+---
+
+## Safety, Git & Intellectual Property Boundaries
+
+* **No Game Binaries / Bytecode in Git**: Root `.gitignore` excludes `data.win`, `.exe`, `.dll`, audio groups, texture pages, and raw dump folders (`hs-game-sdk/data/`, `raw/`, `extracted/`). `hs-game-sdk/curated/` is the deliberate exception to this rule: it holds hand-verified data (not extracted bytecode/assets) and is meant to be shared, so it is tracked normally.
+* **Interoperability Definitions**: Distributes typed symbol names, enum IDs, and data structures necessary for interoperability and modding.
+* **Idempotent Regeneration**: Extraction tooling is deterministic and can be rerun against any updated game binary to regenerate SDK bindings.

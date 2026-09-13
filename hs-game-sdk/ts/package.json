@@ -1,0 +1,8 @@
+{
+  "name": "@hero-siege/sdk",
+  "version": "1.0.0",
+  "description": "Hero Siege Game SDK TypeScript Bindings",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module"
+}

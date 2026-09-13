@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hs-game-sdk"
+version = "1.0.0"
+description = "Hero Siege Game SDK - GameMaker symbols, object schemas, and runtime SDK"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["."]
