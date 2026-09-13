@@ -101,7 +101,15 @@ class CutRelease(unittest.TestCase):
         # tree where only the checked ones moved would pass CI and ship a hub
         # that reports one version and compares with another.
         conf = self.dir / "hub/src-tauri/tauri.conf.json"
-        conf.write_bytes(conf.read_bytes().replace(b'"version": "0.', b'"version": "7.'))
+        raw = conf.read_bytes()
+        stale = b'"version": "%s"' % cut_release.current(self.dir).encode()
+        # Guard the setup, not just the result. This once searched for the
+        # literal `"version": "0.`, which matched nothing the moment the hub
+        # reached 1.0.0 -- so the tree under test was no longer half-bumped and
+        # the assertion below failed for a reason that had nothing to do with
+        # what it guards.
+        self.assertIn(stale, raw, "the half-bump did not apply; this test is testing nothing")
+        conf.write_bytes(raw.replace(stale, b'"version": "7.7.7"'))
 
         with self.assertRaises(SystemExit) as raised:
             self.bump("9.9.9")
