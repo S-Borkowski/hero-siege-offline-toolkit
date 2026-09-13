@@ -106,6 +106,18 @@ server; `npm run dev` alone serves the frontend in a plain browser, where it
 draws the real library from the committed catalog with everything stubbed as not
 installed — so the interface is workable without building the Rust side.
 
+A debug build also starts an MCP bridge on `127.0.0.1:9223`, so the running
+window can be clicked and screenshotted from a terminal rather than by hand:
+
+```bash
+npx -y -p @hypothesi/tauri-mcp-cli tauri-mcp driver-session start --port 9223
+npx -y -p @hypothesi/tauri-mcp-cli tauri-mcp webview-screenshot --window-id hub --file-path shot.png --format png
+```
+
+It is behind `#[cfg(debug_assertions)]` and a release build never starts one —
+it can invoke any command the app has. The window label is `hub`, not `main`;
+[`docs/hub/design.md`](docs/hub/design.md) has the rest of the sharp edges.
+
 | | |
 | --- | --- |
 | Source | [`hub/`](hub) |

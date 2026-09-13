@@ -280,7 +280,46 @@ built executable and nothing else.
 
 `bridge.js` does the same thing one level up — with Tauri absent it answers from
 the embedded catalog, so `npm run dev` draws the real ten-tool library in a plain
-browser and the whole frontend is workable without the Rust side running.
+browser and the whole frontend is workable without the Rust side running. A
+command added to the desktop side wants an answer here too, or the preview
+throws where the hub works: `set_favorite` is the newest one.
+
+### Driving the running window
+
+`tauri-plugin-mcp-bridge` is a dependency of `src-tauri`, started **only** under
+`#[cfg(debug_assertions)]`, bound to `127.0.0.1:9223`, with a dev-only capability
+naming the `hub` window. So a debug build can be clicked, screenshotted and
+queried from a terminal instead of by hand.
+
+The `cfg` is the whole point. The bridge can invoke any command this application
+has, over a socket, with no authentication — which is exactly what makes it
+useful for verifying an interface change and exactly why a release build must
+never start one.
+
+```bash
+npm start                                                     # wait for :9223
+npx -y -p @hypothesi/tauri-mcp-cli tauri-mcp driver-session start --port 9223
+npx -y -p @hypothesi/tauri-mcp-cli tauri-mcp webview-screenshot --window-id hub --file-path shot.png --format png
+npx -y -p @hypothesi/tauri-mcp-cli tauri-mcp webview-interact  --window-id hub --action click --selector "button[aria-label='Star ForgePact']"
+```
+
+Four things about it are worth writing down, because each makes the bridge look
+broken while it is working:
+
+- **The window label is `hub`, not `main`.** Every tool defaults to `main` and
+  fails with `Window 'main' not found`. Pass `--window-id hub`.
+- **The package's binary is `tauri-mcp`**, so `npx` needs `-p`:
+  `npx -y -p @hypothesi/tauri-mcp-cli tauri-mcp <subcommand>`.
+- **`--script` must be one line.** A multi-line script fails with
+  `Script execution timeout` even when it would return instantly.
+- **Long work needs two calls** — the transport gives up well before `--timeout`
+  says it will. Start the work, stash the result on `window`, read it back.
+
+Prefer a selector to a coordinate: a selector re-queries after the grid has
+re-laid itself out, which is what a click that moves a card between the *Starred*
+row and the grid below guarantees will happen. The starring rows in *Confirmed by
+hand* were driven this way, and checked against `state.json` rather than against
+the screenshot alone.
 
 ---
 

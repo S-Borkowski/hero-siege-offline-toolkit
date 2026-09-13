@@ -122,6 +122,51 @@ unknown candidates does X" (not "verify one already-suspected mechanism"):
   been exhausted and come back empty, and even then, hook every plausible
   builtin candidate at once rather than one per relaunch.
 
+## Drive a Tauri App Yourself Instead of Asking Someone to Click It
+
+The same "build the fast loop first" rule applies to the Tauri submodules
+(`hub`, `HS-Offline-Tracker`). A change to a window is not verified by the
+frontend compiling, and the alternative to verifying it should not be asking a
+human to click it and describe what happened.
+
+`hub/src-tauri` carries `tauri-plugin-mcp-bridge`, **behind
+`#[cfg(debug_assertions)]`**, listening on `127.0.0.1:9223`. A debug build can
+therefore be clicked, screenshotted, queried and measured from a terminal. The
+gate is not a detail: the bridge can invoke any command in the application, so
+a release build must never start one. Copy that arrangement — including the
+`cfg` and the loopback bind — into any other Tauri submodule that wants this,
+rather than shipping a listener.
+
+```bash
+npm start                                                     # in hub/, wait for :9223
+npx -y -p @hypothesi/tauri-mcp-cli tauri-mcp driver-session start --port 9223
+npx -y -p @hypothesi/tauri-mcp-cli tauri-mcp webview-screenshot --window-id hub --file-path shot.png --format png
+npx -y -p @hypothesi/tauri-mcp-cli tauri-mcp webview-interact  --window-id hub --action click --selector "button[aria-label='Star ForgePact']"
+```
+
+Four things cost an afternoon to work out and none are visible from the code.
+Each one makes the bridge *look* broken while it is working fine:
+
+- **The hub's window label is `hub`, not `main`.** Every bridge tool defaults
+  to `main` and fails with `Window 'main' not found`. Pass `--window-id hub`.
+- **`npx @hypothesi/tauri-mcp-cli` does not run anything** — the package's
+  binary is named `tauri-mcp`, so it must be
+  `npx -y -p @hypothesi/tauri-mcp-cli tauri-mcp <subcommand>`.
+- **`--script` must be one line.** A multi-line script fails with
+  `Script execution timeout` even when it would return instantly. Write the
+  whole IIFE on a single line.
+- **Long work needs two calls.** The transport gives up well before
+  `--timeout` claims it will, so kick the work off, stash the result on
+  `window`, and read it back in a second call.
+
+Prefer a **selector** over a coordinate (`--selector "button[aria-label='…']"`,
+or `--strategy text`): a selector re-queries after the interface has re-laid
+itself out, and a coordinate captured from an earlier screenshot does not. Then
+assert against what the change actually wrote — `state.json`, the log — rather
+than only against the screenshot, and record the result in that submodule's
+verification table. This is the "prove the instrument" rule below applied to a
+window instead of a hook.
+
 ## Prove the Instrument Before Trusting a Negative Result
 
 The batching advice above is necessary but was not sufficient, and the reason
