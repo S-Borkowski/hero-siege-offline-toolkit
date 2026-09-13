@@ -16,9 +16,9 @@ let checking = $state(false);
  * This was a single `error` string on a banner at the top of the scrolling
  * content, and it was wrong twice over. The banner sat above the tool grid, so
  * an error raised by the eighth card appeared somewhere the reader had scrolled
- * past -- and `refresh`, which runs on a ten-second poll, cleared it on success,
- * so anything not read within ten seconds was gone. An error nobody can see is
- * the same as no error at all.
+ * past -- and it was cleared by the next successful read, which back then ran
+ * on a ten-second poll, so anything not read within ten seconds was gone. An
+ * error nobody can see is the same as no error at all.
  *
  * So: viewport-anchored, and it stays until someone closes it. Only an action
  * the user took clears anything, and only its own entry.
@@ -56,8 +56,9 @@ export function allNotices() {
 /**
  * Add a notice, or bring an existing identical one forward.
  *
- * The dedupe matters because `refresh` polls: a backend that has stopped
- * answering would otherwise stack six copies of the same sentence a minute.
+ * The dedupe matters because the same failure arrives repeatedly: a backend
+ * that has stopped answering would otherwise stack a copy of the same sentence
+ * per tick of the hub's watch.
  */
 export function notify(kind, text) {
   const message = String(text ?? '').trim();
@@ -164,27 +165,41 @@ export async function checkHubUpdate() {
   }
 }
 
+/**
+ * Save the settings.
+ *
+ * No re-read afterwards: `set_settings` announces, so the new view is already
+ * on its way through `library-changed`. Asking for it again cost a second view
+ * build, and while a view build was a blocking 2.8 s that made one click on an
+ * Appearance skin button freeze the window for the better part of six seconds.
+ */
 export async function saveSettings(next) {
   try {
     await invoke('set_settings', { settings: next });
-    await refresh();
   } catch (e) {
     notify('error', e?.message ?? e);
   }
 }
 
 /**
- * Run a command that changes what is installed, then re-read.
+ * Run a command, and let the backend say what it changed.
  *
- * `install_tool` is the exception: it returns as soon as the worker thread is
- * spawned, and the view is refreshed by the `library-changed` event when the
- * install actually finishes.
+ * Nothing is re-read here. Announcing is the rule: every command that changes
+ * what the library shows -- `set_settings`, `launch_tool`, `stop_tool`,
+ * `uninstall_tool`, `rollback_tool`, and `install_tool` when its worker thread
+ * finishes -- calls `announce`, which pushes a freshly built view through
+ * `library-changed`. The rest (`verify_tool`, `open_path`, `open_url`) change
+ * nothing a view could show.
+ *
+ * This used to refresh after everything but `install_tool`, which charged every
+ * action for two view builds: the one the backend had already pushed, and the
+ * one this asked for. A command that ever changes the view without announcing
+ * should call `refresh()` at its own call site rather than putting the cost
+ * back on all of them.
  */
 export async function act(command, args) {
   try {
-    const result = await invoke(command, args);
-    if (command !== 'install_tool') await refresh();
-    return result;
+    return await invoke(command, args);
   } catch (e) {
     notify('error', e?.message ?? e);
     throw e;

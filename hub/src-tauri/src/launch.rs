@@ -347,8 +347,15 @@ pub fn stop(pid: u32) -> Result<()> {
 /// `{application, version}` -- so the hub reuses them instead of inventing a
 /// protocol that would need a commit to all ten repositories.
 pub fn probe(health: &Health) -> bool {
+    // 250 ms to connect. A server on this machine's own loopback that cannot
+    // accept a connection in that long is not usefully "up", and the number has
+    // to be small because it is what a *closed* port costs: nothing here ever
+    // sees a fast refusal on a machine whose network stack swallows the RST, so
+    // every negative answer is paid for at the full timeout. `wait_until_healthy`
+    // keeps the tool's own generous `timeout_s` for the launch path -- a short
+    // connect timeout there just means more attempts inside the same deadline.
     let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_millis(700))
+        .timeout_connect(Duration::from_millis(250))
         .timeout(Duration::from_secs(3))
         .build();
     match agent.get(&health.url).call() {
@@ -378,10 +385,14 @@ pub fn wait_until_healthy(tool: &Tool) -> bool {
 }
 
 /// Is anything listening on this loopback port?
+///
+/// 100 ms, for the reason `probe` gives: a closed port costs the whole timeout
+/// on a machine that does not refuse it promptly, and a listener on this
+/// machine's own loopback accepts in under a millisecond.
 pub fn port_in_use(port: u16) -> bool {
     std::net::TcpStream::connect_timeout(
         &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
-        Duration::from_millis(120),
+        Duration::from_millis(100),
     )
     .is_ok()
 }

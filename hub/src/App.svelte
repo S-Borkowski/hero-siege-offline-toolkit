@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { art } from './skin.svelte.js';
   import {
-    connect, refresh, library, status, updates, staged, busy, hubUpdate,
+    connect, library, status, updates, staged, busy, hubUpdate,
   } from './library.svelte.js';
   import TitleBar from './TitleBar.svelte';
   import Library from './Library.svelte';
@@ -42,15 +42,13 @@
   ];
 
   onMount(() => {
-    const disconnect = connect();
     // Hero Siege starting or stopping changes what the interlocks allow, and
-    // nothing pushes that at us. Ten seconds is often enough to be honest and
-    // rare enough to cost nothing.
-    const timer = setInterval(refresh, 10_000);
-    return () => {
-      clearInterval(timer);
-      disconnect();
-    };
+    // nothing pushes that at us -- so it is still polled, but in Rust, where
+    // the question costs one process snapshot and is answered without building
+    // or sending a view unless something has actually moved. This used to be a
+    // `setInterval(refresh, 10_000)` here, which asked for a full view every
+    // ten seconds whether or not anything had changed.
+    return connect();
   });
 
   function show(id) {

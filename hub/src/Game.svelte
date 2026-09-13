@@ -1,7 +1,7 @@
 <script>
   // What the interlocks are reading, made visible. A staged update should never
   // be a mystery: this is the screen that says why.
-  import { library, tool as findTool, act, refresh } from './library.svelte.js';
+  import { library, tool as findTool, act } from './library.svelte.js';
   import { art } from './skin.svelte.js';
 
   const view = $derived(library());
@@ -51,7 +51,7 @@
     <button
       type="button"
       class="skin skin-button"
-      onclick={() => act('launch_tool', { id: 'hs-offline-launcher' }).then(refresh)}
+      onclick={() => act('launch_tool', { id: 'hs-offline-launcher' })}
       style="--skin-src:url({art('button')})"
     >Open the launcher</button>
   {:else}

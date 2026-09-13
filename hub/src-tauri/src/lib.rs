@@ -36,6 +36,20 @@ pub struct Hub {
     pub catalog: Mutex<LoadedCatalog>,
     /// Tool id -> PID of the process this hub started.
     pub running: Mutex<BTreeMap<String, u32>>,
+    /// Tool id -> whether its health endpoint, or its preferred port, answered
+    /// on the last probe round.
+    ///
+    /// Written only by the probe ticker, read only by `build_view`. A probe is
+    /// a loopback connect, and a machine whose network stack does not refuse a
+    /// closed port promptly pays the whole timeout for every one of them --
+    /// measured here at 700 ms each, 2.8 s for the four tools that declare an
+    /// endpoint. That is far too much to spend assembling a view, and it was
+    /// being spent on the thread pumping the window's messages.
+    ///
+    /// The ticker rewrites the map whole each round, so an answer is never
+    /// older than one tick and a tool it has stopped asking about leaves no
+    /// stale entry behind.
+    pub probes: Mutex<BTreeMap<String, bool>>,
     /// The hub's own newer release, if the last check found one.
     ///
     /// Held here rather than in `state.json`: it is an answer about a remote
@@ -168,6 +182,11 @@ fn build_view(hub: &Hub) -> Result<LibraryView, String> {
         .lock()
         .map_err(|_| "the process table is busy".to_string())?
         .clone();
+    let probes = hub
+        .probes
+        .lock()
+        .map_err(|_| "the probe cache is busy".to_string())?
+        .clone();
     // One look at the process table for the whole view. It answers three
     // questions that used to be asked separately -- the game's state, whether
     // each tracked PID is alive, and whether a tool is running that this hub
@@ -199,9 +218,12 @@ fn build_view(hub: &Hub) -> Result<LibraryView, String> {
         };
         let pid = tracked.or(found);
 
-        // Only reached when the process table knew nothing, because an HTTP
-        // probe is the expensive answer and the weaker one.
-        let answering = pid.is_none() && launch::already_running(tool);
+        // Only reached when the process table knew nothing, because a probe
+        // is the weaker answer as well as the expensive one. Read from the
+        // cache rather than taken here: this function must not touch the
+        // network. See `Hub::probes`, and the budget test at the bottom of
+        // this file.
+        let answering = pid.is_none() && probes.get(&tool.id).copied().unwrap_or(false);
 
         let source_available = tool.source_launch.is_some()
             && hub
@@ -255,8 +277,142 @@ fn announce(app: &AppHandle, hub: &Hub) {
 }
 
 // ---------------------------------------------------------------------------
+// The probe ticker
+// ---------------------------------------------------------------------------
+
+/// How often the ticker looks at the world.
+///
+/// This replaced a `setInterval(refresh, 10_000)` in the frontend, which cost a
+/// full view build, a serialization and an IPC round trip every ten seconds
+/// whether or not anything had changed. Same cadence, because the thing it
+/// watches for -- Hero Siege starting or stopping -- is still not pushed at us
+/// by anything. But the work is now one process snapshot, and nothing is sent
+/// unless an answer actually moved.
+const TICK: Duration = Duration::from_secs(10);
+
+/// The parts of the view that change with nobody asking.
+///
+/// Everything else -- what is installed, what is staged, what the catalog says
+/// -- changes only through a command, and every command that changes it calls
+/// `announce` itself. So this is the whole of what a poll could discover.
+#[derive(PartialEq)]
+struct Pulse {
+    /// Running, its PID, and whether EAC is up.
+    game: (bool, Option<u32>, bool),
+    /// Per tool: its PID if the process table has one, and its last probe.
+    tools: Vec<(String, Option<u32>, bool)>,
+}
+
+/// Take one reading, refreshing the probe cache as a side effect.
+///
+/// None when a lock was busy: a round that could not read the world has nothing
+/// to say about it, and returning a default would announce a change that did
+/// not happen.
+fn take_pulse(hub: &Hub) -> Option<Pulse> {
+    let tools: Vec<catalog::Tool> = hub.catalog.lock().ok()?.catalog.tools.clone();
+    let installed: BTreeMap<String, String> = hub
+        .state
+        .lock()
+        .ok()?
+        .installed
+        .iter()
+        .map(|(id, entry)| (id.clone(), entry.path.clone()))
+        .collect();
+    let running = hub.running.lock().ok()?.clone();
+
+    let snapshot = procs::Snapshot::take();
+    let game = game::status_from(&snapshot);
+
+    let mut pids: BTreeMap<String, Option<u32>> = BTreeMap::new();
+    let mut ask: Vec<&catalog::Tool> = Vec::new();
+    for tool in &tools {
+        // The same two questions `build_view` asks of the process table, in the
+        // same order, so the two cannot disagree about which tool has a PID.
+        let tracked = running
+            .get(&tool.id)
+            .copied()
+            .filter(|pid| snapshot.is_alive(*pid));
+        let found = match (tracked, installed.get(&tool.id)) {
+            (None, Some(path)) => snapshot.find_under(std::path::Path::new(path)),
+            _ => None,
+        };
+        let pid = tracked.or(found);
+
+        // A tool this hub has neither installed nor started cannot be launched,
+        // stopped or updated from its card, so "is something answering
+        // somewhere" changes nothing the reader could act on. It is also the
+        // probe that costs the most, because there is nothing there to answer
+        // it -- six of the ten tools are in this state on a fresh install.
+        if pid.is_none() && (installed.contains_key(&tool.id) || running.contains_key(&tool.id)) {
+            ask.push(tool);
+        }
+        pids.insert(tool.id.clone(), pid);
+    }
+
+    // Concurrently, because the cost of a probe on a machine that does not
+    // refuse a closed port is its timeout, in full, every time. Four of those
+    // in series is four timeouts; started together it is one.
+    let answers: BTreeMap<String, bool> = std::thread::scope(|scope| {
+        let handles: Vec<_> = ask
+            .iter()
+            .map(|tool| scope.spawn(move || (tool.id.clone(), launch::already_running(tool))))
+            .collect();
+        handles.into_iter().filter_map(|handle| handle.join().ok()).collect()
+    });
+
+    if let Ok(mut guard) = hub.probes.lock() {
+        *guard = answers.clone();
+    }
+
+    Some(Pulse {
+        game: (game.running, game.pid, game.eac_running),
+        tools: tools
+            .iter()
+            .map(|tool| {
+                (
+                    tool.id.clone(),
+                    pids.get(&tool.id).copied().flatten(),
+                    answers.get(&tool.id).copied().unwrap_or(false),
+                )
+            })
+            .collect(),
+    })
+}
+
+/// Watch for the changes nothing announces, and announce them.
+///
+/// The first round always announces, which is how the probe cache reaches a
+/// view that was built before any probe had been taken.
+fn start_ticker(app: AppHandle, hub: Arc<Hub>) {
+    std::thread::spawn(move || {
+        let mut last: Option<Pulse> = None;
+        loop {
+            if let Some(pulse) = take_pulse(&hub) {
+                if last.as_ref() != Some(&pulse) {
+                    announce(&app, &hub);
+                    last = Some(pulse);
+                }
+            }
+            std::thread::sleep(TICK);
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
+
+// Everything below that reads the disk, the network or the process table is
+// `#[tauri::command(async)]`. On a plain `fn` that attribute does not make the
+// function async; it moves the call onto the async runtime instead of running
+// it inline in the IPC handler -- which, on Windows, is the thread pumping
+// WebView2's messages. A synchronous command holds that thread for its whole
+// duration, so the window takes no clicks and paints no frames while it runs.
+//
+// `hub_info`, `get_settings` and `report` stay synchronous on purpose: they
+// read memory and nothing else, and the thread hop would cost more than the
+// work. Borrowed `State<'_, Arc<Hub>>` is fine under the attribute precisely
+// because these are still `fn` and not `async fn`.
 
 #[tauri::command]
 fn hub_info(hub: State<'_, Arc<Hub>>) -> HubInfo {
@@ -271,7 +427,7 @@ fn hub_info(hub: State<'_, Arc<Hub>>) -> HubInfo {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn library(hub: State<'_, Arc<Hub>>) -> Result<LibraryView, String> {
     build_view(&hub)
 }
@@ -281,7 +437,7 @@ fn get_settings(hub: State<'_, Arc<Hub>>) -> state::Settings {
     hub.settings()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn set_settings(
     app: AppHandle,
     hub: State<'_, Arc<Hub>>,
@@ -302,7 +458,7 @@ fn set_settings(
 ///
 /// Work offline is checked here rather than only in the UI, so a stale frontend
 /// or a hand-edited state file cannot produce a request the player disabled.
-#[tauri::command]
+#[tauri::command(async)]
 fn check_for_updates(app: AppHandle, hub: State<'_, Arc<Hub>>) -> Result<LibraryView, String> {
     let settings = hub.settings();
     if !settings.may_reach_network() {
@@ -345,7 +501,7 @@ fn check_for_updates(app: AppHandle, hub: State<'_, Arc<Hub>>) -> Result<Library
 /// Separate from `check_for_updates` rather than folded into it: they are two
 /// requests to two places, and keeping them apart lets the interface say which
 /// one it is waiting on instead of showing one spinner for both.
-#[tauri::command]
+#[tauri::command(async)]
 fn check_hub_update(app: AppHandle, hub: State<'_, Arc<Hub>>) -> Result<Option<HubUpdate>, String> {
     let settings = hub.settings();
     if !settings.may_reach_network() {
@@ -361,7 +517,7 @@ fn check_hub_update(app: AppHandle, hub: State<'_, Arc<Hub>>) -> Result<Option<H
     Ok(update)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn install_tool(app: AppHandle, hub: State<'_, Arc<Hub>>, id: String) -> Result<(), String> {
     let tool = hub.tool(&id)?;
     let settings = hub.settings();
@@ -420,7 +576,7 @@ fn bundled_artifact(hub: &Hub, tool: &catalog::Tool) -> Option<PathBuf> {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn uninstall_tool(app: AppHandle, hub: State<'_, Arc<Hub>>, id: String) -> Result<(), String> {
     if let Some(pid) = hub.running.lock().ok().and_then(|r| r.get(&id).copied()) {
         if launch::is_alive(pid) {
@@ -439,7 +595,7 @@ fn uninstall_tool(app: AppHandle, hub: State<'_, Arc<Hub>>, id: String) -> Resul
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn rollback_tool(app: AppHandle, hub: State<'_, Arc<Hub>>, id: String) -> Result<(), String> {
     let installed = install::rollback(&hub.layout, &id).map_err(|e| e.to_string())?;
     hub.log
@@ -453,7 +609,7 @@ fn rollback_tool(app: AppHandle, hub: State<'_, Arc<Hub>>, id: String) -> Result
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn verify_tool(hub: State<'_, Arc<Hub>>, id: String) -> Result<install::VerifyReport, String> {
     let version = hub
         .state
@@ -466,7 +622,7 @@ fn verify_tool(hub: State<'_, Arc<Hub>>, id: String) -> Result<install::VerifyRe
     Ok(install::verify_installed(&hub.layout, &id, &version))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn launch_tool(
     app: AppHandle,
     hub: State<'_, Arc<Hub>>,
@@ -525,7 +681,7 @@ fn launch_tool(
     Ok(started)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn stop_tool(app: AppHandle, hub: State<'_, Arc<Hub>>, id: String) -> Result<(), String> {
     let tracked = hub
         .running
@@ -562,12 +718,12 @@ fn stop_tool(app: AppHandle, hub: State<'_, Arc<Hub>>, id: String) -> Result<(),
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn game_status() -> game::GameStatus {
     game::status()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn open_path(app: AppHandle, path: String) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
     app.opener()
@@ -575,7 +731,7 @@ fn open_path(app: AppHandle, path: String) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn open_url(app: AppHandle, url: String) -> Result<(), String> {
     // Only ever http(s): a catalog field is not a reason to hand an arbitrary
     // scheme to the shell.
@@ -879,6 +1035,7 @@ pub fn run() {
         state: Mutex::new(hub_state),
         catalog: Mutex::new(loaded),
         running: Mutex::new(BTreeMap::new()),
+        probes: Mutex::new(BTreeMap::new()),
         hub_update: Mutex::new(None),
         repo_root,
         elevated,
@@ -900,6 +1057,10 @@ pub fn run() {
         .manage(Arc::clone(&hub))
         .setup(move |app| {
             let handle = app.handle().clone();
+            // The poll that used to live in `App.svelte`, moved to where the
+            // data is: it announces only when something it watches has moved,
+            // so an idle hub costs one process snapshot a tick and no IPC.
+            start_ticker(handle.clone(), Arc::clone(&hub));
             let hub = Arc::clone(&hub);
             std::thread::spawn(move || {
                 // Anything staged from a previous session goes in first, before
@@ -935,6 +1096,92 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `Hub` with nothing installed and nothing running, in its own temporary
+    /// directory. That is the ordinary state of a fresh install, and it used to
+    /// be the expensive one: every tool fell through to a health probe
+    /// precisely because there was nothing on disk to find.
+    fn scratch_hub(name: &str) -> (Hub, PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "hub-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        let layout = Layout::new(root.clone());
+        let _ = layout.ensure();
+        let log = log::Log::new(root.join("hub.log"));
+        let hub = Hub {
+            layout,
+            state: Mutex::new(HubState::default()),
+            catalog: Mutex::new(catalog::embedded().expect("the embedded catalog must verify")),
+            running: Mutex::new(BTreeMap::new()),
+            probes: Mutex::new(BTreeMap::new()),
+            hub_update: Mutex::new(None),
+            repo_root: None,
+            elevated: false,
+            log,
+        };
+        (hub, root)
+    }
+
+    /// The regression that prompted the threading work, pinned.
+    ///
+    /// `build_view` used to call `launch::already_running` per tool, which is a
+    /// loopback connect. On a machine that does not refuse a closed port
+    /// promptly -- this one, where a refusal takes two seconds -- each of the
+    /// four tools that declare a health endpoint cost the probe's whole
+    /// timeout, so one view took 2.8 s. It was built on the thread pumping the
+    /// window's messages, on a ten-second poll, and the hub was therefore
+    /// unresponsive about a third of the time it was open.
+    ///
+    /// 200 ms is deliberately generous against the ~25 ms the process snapshot
+    /// actually costs, so this will not flake on a loaded runner. Anything near
+    /// the budget means a probe has crept back onto this path, which is exactly
+    /// how it got here the first time.
+    #[test]
+    fn building_the_view_never_touches_the_network() {
+        let (hub, root) = scratch_hub("view-budget");
+        let expected = hub.catalog.lock().unwrap().catalog.tools.len();
+
+        let started = std::time::Instant::now();
+        let view = build_view(&hub).expect("the view should build");
+        let elapsed = started.elapsed();
+
+        assert_eq!(view.tools.len(), expected);
+        assert!(
+            view.tools.iter().all(|tool| !tool.running_elsewhere),
+            "an empty probe cache cannot report anything as running elsewhere"
+        );
+        assert!(
+            elapsed < Duration::from_millis(200),
+            "building the view took {elapsed:?}, over its 200 ms budget -- \
+             something on this path is doing network work again"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The other half of the same contract: the view does report what the
+    /// ticker found, so moving the probe off this path did not drop the answer.
+    #[test]
+    fn the_view_reports_what_the_probe_cache_holds() {
+        let (hub, root) = scratch_hub("probe-cache");
+        let id = hub.catalog.lock().unwrap().catalog.tools[0].id.clone();
+        hub.probes.lock().unwrap().insert(id.clone(), true);
+
+        let view = build_view(&hub).expect("the view should build");
+        let tool = view.tools.iter().find(|t| t.tool.id == id).unwrap();
+        assert!(tool.running_pid.is_none());
+        assert!(
+            tool.running_elsewhere,
+            "a cached probe answer is what tells the card a copy is already up"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn the_repo_root_is_found_from_inside_the_crate() {

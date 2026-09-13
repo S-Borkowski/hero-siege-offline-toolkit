@@ -241,3 +241,10 @@ plan the hub was built from.
   — why the hub owns windows and processes rather than tabs (five of the tools refuse
   to be framed), why the ten repositories stay as submodules with the SDK coupling fixed
   directly instead, and the signed catalog that pins a SHA-256 per release asset.
+
+- [Hub responsiveness: the UI thread was blocked on loopback network probes](docs/hub-responsiveness-plan.md)
+  — why the window used to be frozen roughly a third of the time it was idle, measured:
+  every Tauri command was synchronous and so ran on the thread that pumps WebView2, and
+  building the library view made four blocking health probes that each burned their whole
+  timeout because a closed loopback port takes two seconds to refuse on some machines.
+  The fix, and the numbers from before and after it, are both in there.
