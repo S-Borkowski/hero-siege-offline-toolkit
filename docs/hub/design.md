@@ -262,6 +262,21 @@ than the button next to it, because `skin-button`'s sprite insets its plate
 7/64 from the top and bottom while a plain CSS border does not, so two elements
 of identical height looked mismatched.
 
+The two glyphs are the same weight: `more` is the one icon drawn without
+`icon()`'s disc, because a circle around one of a pair reads as a border --
+the border that was just taken off the button around it.
+
+The two are drawn to the same weight. The overflow glyph is the one icon in
+`skin.svelte.js` without `icon()`'s disc behind it: a circle around one of a
+pair beside a heading reads as a border — the border that was just taken off
+the button around it.
+
+`.corner`'s offsets are `.card`'s **padding**, not its padding plus its border.
+An absolutely positioned child is placed against the padding box, so counting
+the 11px nine-slice border into `top` put the glyphs exactly that far below the
+title. The fix is checkable rather than eyeballed: the heading's client rect and
+`.corner`'s are now the same box, top and bottom.
+
 Both glyphs sit outside `.body`. `.body` is itself a button — the whole card
 opens the detail view — and a button inside a button does not give you two
 separate clicks. `.corner` is positioned but carries **no `z-index`**: being
@@ -481,7 +496,7 @@ checks a test cannot make, and because three of them found defects.
 | Uninstall | Removed, back to *Not installed* |
 | Star two tools, unstar one | Cards moved into the *Starred* row and back; `state.json` held exactly the starred ids after each click (2026-09-13) |
 | *Join the Discord* | Invite resolves and does not expire (`expires_at: null`); opened through `open_url`, which hands it to the system browser (2026-09-13) |
-| Card controls after the move | Star and overflow centred on the title line; menu opens downward and paints over the card below it; primary button has the footer to itself (2026-09-13) |
+| Card controls after the move | Heading and `.corner` measured to the same client rect (198.3–218.3), both glyphs centred on it; menu opens downward and paints over the card below it; primary button has the footer to itself (2026-09-13) |
 
 #### Stop kills a tree
 

@@ -205,7 +205,7 @@
         onmouseenter={() => (hovered = 'more')}
         onmouseleave={() => (hovered = '')}
       >
-        <img src={art(hovered === 'more' ? 'more_hover' : 'more')} alt="" />
+        <img src={art(hovered === 'more' ? 'dots_hover' : 'dots')} alt="" />
       </button>
 
       {#if menuOpen}
@@ -324,14 +324,20 @@
      heading's own box rather than floating over the frame. Its height is the
      heading's line box, so `align-items: center` centres both glyphs on the
      title however long the name is. */
-  /* Deliberately no `z-index`: being positioned is already enough to paint it
+  /* `.card`'s 11px of nine-slice border is drawn as a *border*, and an
+     absolutely positioned child is placed against the padding box -- inside
+     that border, not outside it. So these offsets are `.card`'s padding alone;
+     `top: 14px` put the glyphs 11px below the title, which is what the border
+     is thick.
+
+     Deliberately no `z-index`: being positioned is already enough to paint it
      over `.body`, which is not, and a stacking context here would trap the
      menu's `z-index: 11` inside this 42px box -- where the next card's own
      glyphs would then paint over the open menu. */
   .corner {
     position: absolute;
-    top: 14px;
-    right: 14px;
+    top: 3px;
+    right: 3px;
     height: 20px;
     display: flex;
     align-items: center;

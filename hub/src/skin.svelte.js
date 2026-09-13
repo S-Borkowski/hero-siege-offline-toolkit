@@ -93,6 +93,15 @@ const star = (on = false, hover = false) => svg(`
         stroke-width="4" stroke-linejoin="round"/>
 `);
 
+// The card's overflow glyph, and the only icon drawn without `icon()`'s disc.
+// It sits beside the star on the title's line, and `icon()`'s circle reads as a
+// border on one of the two -- which is exactly the border that was taken off
+// the button around it. Same two stroke colours as the star, so the pair match.
+const dots = (hover = false) => svg(`
+  <path d="M17 32h.01M32 32h.01M47 32h.01" fill="none"
+        stroke="${hover ? '#f4d38a' : '#7d8a99'}" stroke-width="8" stroke-linecap="round"/>
+`);
+
 const transparent = svg('');
 
 const assets = {
@@ -145,6 +154,8 @@ const assets = {
   star_off_hover: star(false, true),
   star_on: star(true),
   star_on_hover: star(true, true),
+  dots: dots(),
+  dots_hover: dots(true),
 
   // The community link, drawn rather than fetched: the hub ships no bitmaps and
   // makes no request to render its own interface.
