@@ -13,7 +13,7 @@ track your runs, or launch the game offline.
 
 ## Get the Toolkit Hub
 
-**[Download the latest release →](https://github.com/S-Borkowski/hero-siege-offline-toolkit/releases/latest)**
+**[Download the latest release →](https://github.com/falorfrozen-cmd/hero-siege-offline-toolkit/releases/latest)**
 
 One window that installs, launches and updates every tool below. Getting the
 toolkit no longer means visiting ten GitHub pages, downloading ten
