@@ -120,6 +120,35 @@ jobs:
             exit 1
           fi
 
+      # tauri-action looks for a *draft* release with this tag and, finding
+      # none, creates one. A release for the tag that is already published is
+      # invisible to that search -- so the tag ends up with two release objects,
+      # the installer and latest.json go to the new draft, and
+      # `releases/latest/download/latest.json` resolves to whichever one GitHub
+      # calls latest. On hub-v0.1.1 that was the empty one, so every installed
+      # hub asked for its update and got a 404 with nothing to show for it.
+      #
+      # Stop rather than add a second release to a tag that already has one.
+      - name: This tag has no release yet
+        if: startsWith(github.ref, 'refs/tags/hub-v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # Not `--paginate`: with `--jq` that applies the filter per page and
+          # prints one count per page, so the comparison below would read
+          # "0\n0" and fail a clean tag. Releases come back newest first, and a
+          # stray one for the tag being built now is necessarily recent.
+          existing=$(gh api "repos/$REPO/releases?per_page=100" \
+            --jq "[.[] | select(.tag_name == \"$TAG\")] | length")
+          echo "releases already on $TAG: $existing"
+          if [ "$existing" != "0" ]; then
+            echo "::error::$TAG already has $existing release(s). Delete them before re-running, or this build will add another and the updater endpoint will resolve to the wrong one."
+            exit 1
+          fi
+
       - name: Build, sign and publish
         uses: tauri-apps/tauri-action@v0
         env:
@@ -150,6 +179,29 @@ jobs:
           # at. Without it the hub can be installed but never updates itself.
           includeUpdaterJson: true
           args: ${{ github.event.inputs.dry_run == 'true' && '--no-bundle' || '' }}
+
+      # `releaseDraft: true` is deliberate -- nothing ships without someone
+      # looking at it first -- but it has a consequence that is easy to forget
+      # and impossible to see from the hub: a draft's assets are not served, so
+      # `releases/latest/download/latest.json` stays a 404 and no installed hub
+      # can find the release. It is not published until a human publishes it.
+      - name: Say that the release is still a draft
+        if: startsWith(github.ref, 'refs/tags/hub-v')
+        shell: bash
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          {
+            echo "### $TAG is built, and is a draft"
+            echo
+            echo "Until it is published, \`latest.json\` is not served and every"
+            echo "installed hub's update check gets a 404:"
+            echo
+            echo "    https://github.com/$REPO/releases/latest/download/latest.json"
+            echo
+            echo "Publish it at https://github.com/$REPO/releases"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Keep the installer as an artifact on a dry run
         if: github.event.inputs.dry_run == 'true'
