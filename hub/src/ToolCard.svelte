@@ -2,7 +2,7 @@
   // One tool, as the Library grid draws it: mark, name, one line, a state chip,
   // one primary button, and an overflow menu for everything else.
   import { art } from './skin.svelte.js';
-  import { act, progressFor, bytes, setFavorite } from './library.svelte.js';
+  import { act, progressFor, bytes, setFavorite, isTerminal } from './library.svelte.js';
 
   let { tool, onopen } = $props();
 
@@ -28,10 +28,13 @@
    * Update all, and the auto-install that follows a launch check. Both drive
    * this card's progress bar, and without this the button stayed live under a
    * download already running against the same staging directory.
+   *
+   * `isTerminal` rather than a list written out here. This card once carried
+   * its own copy of that list, which is how it went on showing *Verifying*
+   * for a download that had finished and been staged: the phase was terminal
+   * and this line had never heard of it.
    */
-  const inFlight = $derived(
-    progress !== null && !['done', 'failed'].includes(progress.phase),
-  );
+  const inFlight = $derived(progress !== null && !isTerminal(progress.phase));
 
   /**
    * The version this card should claim, which is not always the one the backend

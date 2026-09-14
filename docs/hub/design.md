@@ -211,6 +211,24 @@ is worthless here: the download runs for minutes, so an install begun against a
 closed game went on to overwrite a running one, with a check that had been true
 when it was made and meaningless by the time it was used.
 
+**Every path that emits progress reaches a terminal event.** A card counts
+itself busy from `Started` until one arrives, and nothing else clears that — not
+a rejected command, not `library-changed` — so a path that returns without one
+disables that card's button until the hub is restarted. There are four terminal
+phases, and they are distinguishable on purpose: `done` installed a version,
+`failed` installed nothing and offers *Try again*, `staged` downloaded and
+verified but is waiting on an interlock, `downloaded` fetched the bytes because
+that is all auto-download was asked to do. `staged` is emphatically not `done`,
+or the card claims a version it does not have. The frontend's copy of that list
+lives in one place (`TERMINAL_PHASES`) because it had three, and the two new
+phases would otherwise have been unknown to all of them.
+
+Guaranteeing it is structural rather than remembered: `ProgressStream` notices
+terminal events passing through and emits `Failed` if it is dropped without one.
+Four exits lost their terminal event simultaneously when orchestration moved out
+of `install::install`, which had been emitting it on the way out — which is the
+argument against relying on remembering at each `return`.
+
 **One install per tool at a time**, held in Rust from before the download until
 after the activation. Two installs of one tool share a `.part` download and a
 staging directory: the second writes over the first's download, then races it to

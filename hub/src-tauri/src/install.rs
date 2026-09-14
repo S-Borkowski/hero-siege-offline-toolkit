@@ -78,6 +78,48 @@ pub enum Progress {
     Activating { id: String },
     Done { id: String, version: String },
     Failed { id: String, error: String },
+    /// Downloaded and verified, but not written: the interlock was closed when
+    /// the download finished. Terminal, and deliberately not `Done` -- the card
+    /// must not claim a version is installed when it is sitting in the staging
+    /// queue waiting for a game to be closed.
+    Staged { id: String, reason: String },
+    /// Downloaded and verified, and that is all that was asked for:
+    /// auto-download with auto-install off. Terminal, and distinct from
+    /// `Staged` because nothing is waiting to be applied -- the bytes are
+    /// cached so that installing later is quick.
+    Downloaded { id: String },
+}
+
+impl Progress {
+    /// Whether this ends the stream for its tool.
+    ///
+    /// Every path that emits `Started` has to reach one of these, or the card
+    /// that started showing progress never stops: its button stays disabled and
+    /// the only way out is restarting the hub. The frontend has the same list,
+    /// in one place, for the same reason.
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            Progress::Done { .. }
+                | Progress::Failed { .. }
+                | Progress::Staged { .. }
+                | Progress::Downloaded { .. }
+        )
+    }
+
+    pub fn id(&self) -> &str {
+        match self {
+            Progress::Started { id, .. }
+            | Progress::Downloading { id, .. }
+            | Progress::Verifying { id }
+            | Progress::Extracting { id }
+            | Progress::Activating { id }
+            | Progress::Done { id, .. }
+            | Progress::Failed { id, .. }
+            | Progress::Staged { id, .. }
+            | Progress::Downloaded { id } => id,
+        }
+    }
 }
 
 /// A record of what was written, kept inside the version directory so it travels

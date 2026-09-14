@@ -126,11 +126,30 @@ export function staged() {
   return tools().filter((t) => t.staged);
 }
 
+/**
+ * The phases that end a progress stream.
+ *
+ * Exported, and the only copy, because a card counts itself busy until one of
+ * these arrives: a phase missing from this list leaves that card's button
+ * disabled for the rest of the session. There were three copies of it, and the
+ * backend grew two terminal phases that none of them knew about.
+ *
+ * - `done`       installed, and the version is on the card.
+ * - `failed`     nothing was installed; the button goes back to Try again.
+ * - `staged`     downloaded and verified, waiting for a tool or the game to be
+ *                closed. Not `done`: no version was installed.
+ * - `downloaded` downloaded and nothing more was asked for (auto-download with
+ *                auto-install off). Not `staged`: nothing is waiting.
+ */
+export const TERMINAL_PHASES = ['done', 'failed', 'staged', 'downloaded'];
+
+export function isTerminal(phase) {
+  return TERMINAL_PHASES.includes(phase);
+}
+
 /** Anything the hub is mid-way through fetching or writing. */
 export function busy() {
-  return Object.values(progress).filter(
-    (p) => p && !['done', 'failed'].includes(p.phase),
-  );
+  return Object.values(progress).filter((p) => p && !isTerminal(p.phase));
 }
 
 export async function refresh() {
@@ -242,9 +261,16 @@ export function connect() {
       // there is no rejected promise anywhere for it to surface through.
       notify('error', `${payload.id}: ${payload.error}`);
     }
-    if (payload.phase === 'done') {
+    if (payload.phase === 'staged') {
+      // The click did not install anything, and the reason is not on the
+      // Library screen the click came from. Saying so beats a card that simply
+      // goes quiet.
+      notify('info', `${payload.id}: ${payload.reason}`);
+    }
+    if (['done', 'staged', 'downloaded'].includes(payload.phase)) {
       // Leave the finished row up briefly so the drawer does not blink an
-      // install out of existence the instant it lands.
+      // install out of existence the instant it lands. `failed` stays until the
+      // reader does something about it.
       const id = payload.id;
       setTimeout(() => {
         const { [id]: _gone, ...rest } = progress;

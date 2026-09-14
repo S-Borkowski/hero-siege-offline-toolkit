@@ -621,6 +621,58 @@ impl Drop for InstallClaim {
     }
 }
 
+/// A progress stream that cannot be left open.
+///
+/// A card shows itself busy from `Started` until a terminal event, so a path
+/// that returns without one disables that card's button for the rest of the
+/// session -- there is no second signal that clears it, and `library-changed`
+/// does not. Emitting one by hand at every exit is exactly the discipline that
+/// failed when orchestration moved out of `install::install`, which had been
+/// emitting `Failed` on the way out: four exits lost it at once.
+///
+/// So it is structural instead. Terminal events passing through are noticed,
+/// and a drop without one emits `Failed` rather than leaving the card stuck.
+/// The explicit emissions are still there and still carry the real reason; this
+/// only catches what they miss.
+struct ProgressStream<'a> {
+    inner: &'a dyn Fn(install::Progress),
+    id: String,
+    finished: std::cell::Cell<bool>,
+}
+
+impl<'a> ProgressStream<'a> {
+    fn new(id: &str, inner: &'a dyn Fn(install::Progress)) -> Self {
+        Self {
+            inner,
+            id: id.to_string(),
+            finished: std::cell::Cell::new(false),
+        }
+    }
+
+    fn emit(&self, progress: install::Progress) {
+        if progress.is_terminal() {
+            self.finished.set(true);
+        }
+        (self.inner)(progress);
+    }
+
+    /// Hand to anything that takes an emitter, so what it emits is seen here.
+    fn as_emitter(&self) -> impl Fn(install::Progress) + '_ {
+        move |progress| self.emit(progress)
+    }
+}
+
+impl Drop for ProgressStream<'_> {
+    fn drop(&mut self) {
+        if !self.finished.get() {
+            (self.inner)(install::Progress::Failed {
+                id: self.id.clone(),
+                error: "the install stopped without saying why".into(),
+            });
+        }
+    }
+}
+
 /// The interlock, read now.
 ///
 /// Deliberately a function rather than a value computed once and carried: the
@@ -650,7 +702,13 @@ fn activate_or_stage(
     blocked: Option<String>,
 ) -> Result<(), String> {
     if let Some(reason) = blocked {
-        stage(hub, tool, artifact, reason);
+        stage(hub, tool, artifact, reason.clone());
+        // Terminal, and not `Done`: the bytes are verified and waiting, but no
+        // version has been installed, and a card told otherwise would show one.
+        emitter(install::Progress::Staged {
+            id: tool.id.clone(),
+            reason,
+        });
         return Ok(());
     }
     match install::install_artifact(&hub.layout, tool, artifact, emitter) {
@@ -669,6 +727,13 @@ fn activate_or_stage(
         Err(error) => {
             hub.log
                 .error(format!("installing {} failed: {error}", tool.id));
+            // `install_artifact` does not emit this itself -- the old
+            // `install::install` wrapper did, and nothing replaced it when the
+            // orchestration moved here.
+            emitter(install::Progress::Failed {
+                id: tool.id.clone(),
+                error: error.to_string(),
+            });
             Err(error.to_string())
         }
     }
@@ -725,16 +790,32 @@ fn install_tool(app: AppHandle, hub: State<'_, Arc<Hub>>, id: String) -> Result<
     // -- so `await install_tool(...)` resolved before anything had been
     // downloaded, and Update all cleared its own button while ten installs were
     // still running.
+    let stream = ProgressStream::new(&tool.id, &emitter);
+    let emit = stream.as_emitter();
+
     let artifact = match bundled_artifact(&hub, &tool) {
         Some(path) => path,
-        None => install::download(&tool, &hub.layout, &emitter).map_err(|error| {
-            hub.log
-                .error(format!("downloading {} failed: {error}", tool.id));
-            error.to_string()
-        })?,
+        None => match install::download(&tool, &hub.layout, &emit) {
+            Ok(path) => path,
+            Err(error) => {
+                hub.log
+                    .error(format!("downloading {} failed: {error}", tool.id));
+                // `download` emits `Started` and then nothing on the way out,
+                // so without this the card sits on *Starting* forever.
+                stream.emit(install::Progress::Failed {
+                    id: tool.id.clone(),
+                    error: error.to_string(),
+                });
+                return Err(error.to_string());
+            }
+        },
     };
 
-    let result = activate_or_stage(&hub, &tool, &artifact, &emitter, blocked_now(&hub, &tool));
+    let result = activate_or_stage(&hub, &tool, &artifact, &emit, blocked_now(&hub, &tool));
+    // Closed before the announce, so the card has its terminal event by the
+    // time the new library view arrives to be drawn from.
+    drop(emit);
+    drop(stream);
     announce(&app, &hub);
     result
 }
@@ -1120,11 +1201,30 @@ fn startup_check(app: AppHandle, hub: Arc<Hub>) {
             continue;
         };
 
-        let Ok(artifact) = install::download(&tool, &hub.layout, &emitter) else {
-            continue;
+        let stream = ProgressStream::new(&tool.id, &emitter);
+        let emit = stream.as_emitter();
+
+        let artifact = match install::download(&tool, &hub.layout, &emit) {
+            Ok(path) => path,
+            Err(error) => {
+                hub.log
+                    .error(format!("auto-download of {} failed: {error}", tool.id));
+                stream.emit(install::Progress::Failed {
+                    id: tool.id.clone(),
+                    error: error.to_string(),
+                });
+                continue;
+            }
         };
 
         if !settings.effective_auto_install() {
+            // Downloaded is all that was asked for. Terminal, and distinct from
+            // `Staged`: nothing is waiting to be applied, the bytes are just
+            // cached so that installing later is quick. Without it the card
+            // stayed on *Verifying* until the hub was restarted.
+            stream.emit(install::Progress::Downloaded {
+                id: tool.id.clone(),
+            });
             continue;
         }
 
@@ -1133,13 +1233,9 @@ fn startup_check(app: AppHandle, hub: Arc<Hub>) {
         // open by the time it finishes. An update that cannot be applied safely
         // waits and says why, rather than being written over a running tool or
         // over a game whose PE ForgePact has patched.
-        if let Err(error) = activate_or_stage(
-            &hub,
-            &tool,
-            &artifact,
-            &emitter,
-            blocked_now(&hub, &tool),
-        ) {
+        if let Err(error) =
+            activate_or_stage(&hub, &tool, &artifact, &emit, blocked_now(&hub, &tool))
+        {
             hub.log
                 .error(format!("auto-install of {} failed: {error}", tool.id));
         }
@@ -1502,6 +1598,139 @@ mod tests {
         InstallClaim::take(&hub, "forgepact").expect("released once the first is done");
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Collect the phases an emitter is handed, in order.
+    fn recorder() -> (impl Fn(install::Progress), Arc<Mutex<Vec<String>>>) {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&seen);
+        let emit = move |progress: install::Progress| {
+            let phase = match progress {
+                install::Progress::Started { .. } => "started",
+                install::Progress::Downloading { .. } => "downloading",
+                install::Progress::Verifying { .. } => "verifying",
+                install::Progress::Extracting { .. } => "extracting",
+                install::Progress::Activating { .. } => "activating",
+                install::Progress::Done { .. } => "done",
+                install::Progress::Failed { .. } => "failed",
+                install::Progress::Staged { .. } => "staged",
+                install::Progress::Downloaded { .. } => "downloaded",
+            };
+            sink.lock().unwrap().push(phase.to_string());
+        };
+        (emit, seen)
+    }
+
+    fn installable_tool(hub: &Hub) -> catalog::Tool {
+        hub.catalog
+            .lock()
+            .unwrap()
+            .catalog
+            .tools
+            .iter()
+            .find(|t| t.is_installable())
+            .cloned()
+            .expect("the embedded catalog has an installable tool")
+    }
+
+    /// A card shows itself busy from `Started` until a terminal event arrives.
+    /// A staged install never sent one, so the card sat on *Verifying* with its
+    /// button disabled until the hub was restarted -- and `library-changed`
+    /// does not clear it, because the busy state takes priority over the staged
+    /// state it would otherwise show.
+    #[test]
+    fn staging_ends_the_progress_stream_without_claiming_an_install() {
+        let (hub, root) = scratch_hub("staged-terminal");
+        let hub = Arc::new(hub);
+        let tool = installable_tool(&hub);
+        let (emit, seen) = recorder();
+
+        activate_or_stage(
+            &hub,
+            &tool,
+            &root.join("downloaded.zip"),
+            &emit,
+            Some("Hero Siege is running.".to_string()),
+        )
+        .expect("a blocked update is not an error");
+
+        let phases = seen.lock().unwrap().clone();
+        assert_eq!(
+            phases,
+            vec!["staged"],
+            "staging must end the stream, and must not report itself as done"
+        );
+        assert!(
+            install::Progress::Staged {
+                id: tool.id.clone(),
+                reason: String::new()
+            }
+            .is_terminal(),
+            "and the frontend has to be able to tell that it ended"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The same hole on the failure side: `install_artifact` does not emit
+    /// `Failed` itself. The wrapper that used to do it was dropped when the
+    /// orchestration moved here, so a failed install left the card on
+    /// *Verifying* rather than offering Try again.
+    #[test]
+    fn a_failed_install_ends_its_stream_so_the_card_can_offer_a_retry() {
+        let (hub, root) = scratch_hub("failed-terminal");
+        let hub = Arc::new(hub);
+        let tool = installable_tool(&hub);
+        let (emit, seen) = recorder();
+
+        // An artifact that is not there: `install_artifact` cannot hash it.
+        let outcome = activate_or_stage(&hub, &tool, &root.join("missing.zip"), &emit, None);
+        assert!(outcome.is_err(), "a missing artifact is a failure");
+
+        let phases = seen.lock().unwrap().clone();
+        assert_eq!(
+            phases.last().map(String::as_str),
+            Some("failed"),
+            "the stream must end, or the button never comes back: {phases:?}"
+        );
+        assert!(
+            !hub.state.lock().unwrap().installed.contains_key(&tool.id),
+            "and nothing may be recorded as installed"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The backstop, for the exits nobody thought about.
+    ///
+    /// Four of them lost their terminal event at once when orchestration moved
+    /// out of `install::install`, which is the argument for not relying on
+    /// remembering.
+    #[test]
+    fn a_stream_dropped_without_a_terminal_event_still_ends() {
+        let (emit, seen) = recorder();
+        {
+            let stream = ProgressStream::new("forgepact", &emit);
+            stream.emit(install::Progress::Started {
+                id: "forgepact".into(),
+                total: 10,
+            });
+        }
+        assert_eq!(
+            seen.lock().unwrap().clone(),
+            vec!["started", "failed"],
+            "an abandoned stream must fail rather than hang"
+        );
+
+        // And a stream that ended properly is not failed a second time.
+        let (emit, seen) = recorder();
+        {
+            let stream = ProgressStream::new("forgepact", &emit);
+            stream.emit(install::Progress::Downloaded {
+                id: "forgepact".into(),
+            });
+        }
+        assert_eq!(seen.lock().unwrap().clone(), vec!["downloaded"]);
     }
 
     /// The regression that prompted the threading work, pinned.

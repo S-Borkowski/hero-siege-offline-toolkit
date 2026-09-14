@@ -159,6 +159,8 @@ fn record() -> (impl Fn(Progress), std::sync::mpsc::Receiver<String>) {
             Progress::Activating { .. } => "activating",
             Progress::Done { .. } => "done",
             Progress::Failed { .. } => "failed",
+            Progress::Staged { .. } => "staged",
+            Progress::Downloaded { .. } => "downloaded",
         };
         let _ = tx.send(phase.to_string());
     };
