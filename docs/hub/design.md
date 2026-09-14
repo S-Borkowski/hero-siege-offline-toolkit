@@ -516,11 +516,12 @@ a `catalog` release.
 
 ### Still to do
 
-Both notifier templates exist and neither is installed anywhere yet. All ten
-tool repositories carry `notify-hub.yml`, correctly keyed to each one's default
-branch — `hero-siege-item-editor` is `master`, not `main` — but none has a
-`HUB_DISPATCH_TOKEN`, so every one of them checks for the secret, logs that it
-is missing, and skips. They are installed and inert.
+The push notifier is installed in all ten tool repositories, keyed to each
+one's default branch — `hero-siege-item-editor` is `master`, not `main`.
+`HUB_DISPATCH_TOKEN` was configured in all ten on 2026-09-14 and dispatches
+were verified. The hub opens pointer-update PRs and automatically merges
+validated bumps through `submodule-dispatch.yml`; these push notifications
+are operational.
 
 `notify-hub-release.example.yml` is not installed at all, and it is the half
 that matters most: the catalog is built from each tool's latest *release*, and

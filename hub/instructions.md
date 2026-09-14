@@ -68,12 +68,15 @@ cd hub
 npm install
 npm start           # the desktop app against a Vite dev server
 npm run dev         # the frontend alone, in a plain browser
-npm test            # cargo test (the Rust engine)
+npm test            # frontend tests, then cargo test (the Rust engine)
 npm run build       # the frontend bundle
 npm run release     # the NSIS installer
 npm run check       # build + test, what CI runs
 ```
 
+- **Frontend tests run first**, using explicit file paths so the test command
+  also works on supported Node 20.19+. Passing arguments to `npm test` runs only
+  the requested Rust tests.
 - **`npm test` shells out to Rustup's `cargo.exe` directly** (`scripts/test.mjs`)
   rather than through `cmd`, because a checkout path containing a space stopped
   at the first word. Same for `npm run tauri` (`scripts/tauri.mjs`).

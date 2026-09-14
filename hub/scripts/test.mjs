@@ -2,6 +2,7 @@
 // directly so project paths containing spaces never pass through cmd parsing.
 
 import { execFileSync } from 'node:child_process';
+import { readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -15,14 +16,19 @@ const manifest = join('src-tauri', 'Cargo.toml');
 // reach. Anything under `src/` matching `*.test.js` runs, and those modules are
 // deliberately free of Svelte runes so the plain runner can import them.
 //
-// `node --test src/` is not the same thing and does not work here: it treats
-// the directory as one test file. The glob is expanded by Node, not the shell,
-// so it behaves the same on every platform.
+// Pass explicit file paths: supported Node 20 does not expand test globs,
+// and directory arguments are not portable across Node versions. Discover
+// top-level src/*.test.js files here without invoking a shell.
 //
 // Skipped when arguments are passed, which means someone is running one Rust
 // test by name and does not want the whole frontend suite in the way.
 if (args.length === 0) {
-  execFileSync(process.execPath, ['--test', 'src/*.test.js'], { cwd: root, stdio: 'inherit' });
+  const testFiles = readdirSync(join(root, 'src'), { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.test.js'))
+    .map((entry) => join('src', entry.name))
+    .sort();
+  if (testFiles.length === 0) throw new Error('No frontend test files found in src/.');
+  execFileSync(process.execPath, ['--test', ...testFiles], { cwd: root, stdio: 'inherit' });
 }
 
 // Calling a batch file through `cmd /c` made a checkout whose path contained
