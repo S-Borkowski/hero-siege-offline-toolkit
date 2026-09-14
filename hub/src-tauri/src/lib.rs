@@ -15,7 +15,7 @@ pub mod state;
 pub mod verify;
 pub mod version;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -50,6 +50,15 @@ pub struct Hub {
     /// older than one tick and a tool it has stopped asking about leaves no
     /// stale entry behind.
     pub probes: Mutex<BTreeMap<String, bool>>,
+    /// Tool ids with an install in flight, whoever started it.
+    ///
+    /// Two installs of one tool share a `.part` download and a staging
+    /// directory, so the second writes over the first's download and then races
+    /// it to the rename that commits the install. Nothing above this stopped
+    /// that: the interface disables a card's button while its install runs, but
+    /// Update all submits every tool at once and a second click on it arrives
+    /// before any of them have finished.
+    pub installing: Mutex<BTreeSet<String>>,
     /// The hub's own newer release, if the last check found one.
     ///
     /// Held here rather than in `state.json`: it is an answer about a remote
@@ -550,6 +559,86 @@ fn check_hub_update(app: AppHandle, hub: State<'_, Arc<Hub>>) -> Result<Option<H
     Ok(update)
 }
 
+/// Whether a tool is running, answered the way `build_view` answers it.
+///
+/// `Hub.running` on its own is not enough, and the interlock used to consult
+/// nothing else. It lives in memory, so a restart empties it while the tool it
+/// was tracking is still open -- and a restart is exactly when `apply_staged`
+/// runs, which made the one moment the interlock most needed to hold the one
+/// moment it could not see anything. A process whose executable sits inside the
+/// tool's install directory is that tool, whatever it is called, and that
+/// survives a restart.
+///
+/// Takes the snapshot rather than making one so that a caller checking several
+/// tools gets answers that cannot contradict each other, the same reason
+/// `build_view` takes one.
+fn tool_is_running(hub: &Hub, id: &str, snapshot: &procs::Snapshot) -> bool {
+    let tracked = hub.running.lock().ok().and_then(|r| r.get(id).copied());
+    if tracked.is_some_and(|pid| snapshot.is_alive(pid)) {
+        return true;
+    }
+    let installed = hub
+        .state
+        .lock()
+        .ok()
+        .and_then(|s| s.installed.get(id).map(|i| i.path.clone()));
+    installed
+        .map(|path| snapshot.find_under(std::path::Path::new(&path)).is_some())
+        .unwrap_or(false)
+}
+
+/// The right to install one tool, released when this is dropped.
+///
+/// Dropped on every exit from the install -- success, failure, the early return
+/// when the interlock stages it -- because a claim leaked once is a tool that
+/// can never be installed again without restarting the hub.
+struct InstallClaim {
+    hub: Arc<Hub>,
+    id: String,
+}
+
+impl InstallClaim {
+    fn take(hub: &Arc<Hub>, id: &str) -> Result<Self, String> {
+        let mut claimed = hub
+            .installing
+            .lock()
+            .map_err(|_| "the install set is busy".to_string())?;
+        if !claimed.insert(id.to_string()) {
+            return Err(format!("{id} is already being installed."));
+        }
+        Ok(Self {
+            hub: Arc::clone(hub),
+            id: id.to_string(),
+        })
+    }
+}
+
+impl Drop for InstallClaim {
+    fn drop(&mut self) {
+        if let Ok(mut claimed) = self.hub.installing.lock() {
+            claimed.remove(&self.id);
+        }
+    }
+}
+
+/// Record an install that cannot be applied yet, with the reason on it.
+fn stage(hub: &Hub, tool: &catalog::Tool, artifact: &std::path::Path, reason: String) {
+    hub.log.info(format!("staged {}: {reason}", tool.id));
+    if let Ok(mut guard) = hub.state.lock() {
+        guard.staged.insert(
+            tool.id.clone(),
+            state::Staged {
+                version: tool.version.clone(),
+                artifact_path: artifact.to_string_lossy().to_string(),
+                sha256: tool.artifact.sha256.clone(),
+                staged_at: state::now_iso(),
+                blocked_by: reason,
+            },
+        );
+    }
+    hub.persist();
+}
+
 #[tauri::command(async)]
 fn install_tool(app: AppHandle, hub: State<'_, Arc<Hub>>, id: String) -> Result<(), String> {
     let tool = hub.tool(&id)?;
@@ -561,40 +650,69 @@ fn install_tool(app: AppHandle, hub: State<'_, Arc<Hub>>, id: String) -> Result<
     }
 
     let hub = Arc::clone(&hub);
-    let app_for_thread = app.clone();
-    std::thread::spawn(move || {
-        let emitter = {
-            let app = app_for_thread.clone();
-            move |progress: install::Progress| {
-                let _ = app.emit("install-progress", progress);
-            }
-        };
+    // One at a time per tool, whoever asked. Held for the whole command.
+    let _claim = InstallClaim::take(&hub, &tool.id)?;
 
-        let outcome = match bundled_artifact(&hub, &tool) {
-            Some(path) => install::install_artifact(&hub.layout, &tool, &path, &emitter),
-            None => install::install(&hub.layout, &tool, &emitter),
-        };
-
-        match outcome {
-            Ok(installed) => {
-                hub.log.info(format!(
-                    "installed {} {} ({})",
-                    tool.id, installed.version, installed.sha256
-                ));
-                if let Ok(mut guard) = hub.state.lock() {
-                    guard.installed.insert(tool.id.clone(), installed);
-                    guard.staged.remove(&tool.id);
-                }
-                hub.persist();
-            }
-            Err(error) => {
-                hub.log
-                    .error(format!("installing {} failed: {error}", tool.id));
-            }
+    let emitter = {
+        let app = app.clone();
+        move |progress: install::Progress| {
+            let _ = app.emit("install-progress", progress);
         }
-        announce(&app_for_thread, &hub);
-    });
-    Ok(())
+    };
+
+    // The interlock, on the path a person reaches by clicking. It lived only on
+    // the auto-install path, so Update all -- which submits every tool with a
+    // newer release, including ones whose own card withholds Update because
+    // they are open -- wrote over running tools, and over a game whose PE
+    // ForgePact has patched.
+    let snapshot = procs::Snapshot::take();
+    let game = game::status_from(&snapshot);
+    let running = tool_is_running(&hub, &tool.id, &snapshot);
+    if let Some(reason) = game::install_blocked_by(&tool.name, running, &game) {
+        // Staged, not refused. The reader asked for this update and the
+        // download is the slow part; making them ask again once the tool is
+        // closed would throw that away for nothing.
+        let artifact = match bundled_artifact(&hub, &tool) {
+            Some(path) => path,
+            None => install::download(&tool, &hub.layout, &emitter).map_err(|e| e.to_string())?,
+        };
+        stage(&hub, &tool, &artifact, reason);
+        announce(&app, &hub);
+        return Ok(());
+    }
+
+    // Inline rather than on a spawned thread. `#[tauri::command(async)]`
+    // already runs this off the thread pumping the window's messages, and
+    // spawning again meant the command returned as soon as the worker started
+    // -- so `await install_tool(...)` resolved before anything had been
+    // downloaded, and Update all cleared its own button while ten installs were
+    // still running.
+    let outcome = match bundled_artifact(&hub, &tool) {
+        Some(path) => install::install_artifact(&hub.layout, &tool, &path, &emitter),
+        None => install::install(&hub.layout, &tool, &emitter),
+    };
+
+    let result = match outcome {
+        Ok(installed) => {
+            hub.log.info(format!(
+                "installed {} {} ({})",
+                tool.id, installed.version, installed.sha256
+            ));
+            if let Ok(mut guard) = hub.state.lock() {
+                guard.installed.insert(tool.id.clone(), installed);
+                guard.staged.remove(&tool.id);
+            }
+            hub.persist();
+            Ok(())
+        }
+        Err(error) => {
+            hub.log
+                .error(format!("installing {} failed: {error}", tool.id));
+            Err(error.to_string())
+        }
+    };
+    announce(&app, &hub);
+    result
 }
 
 /// An artifact that came with an offline bundle, if it is there and correct.
@@ -794,19 +912,22 @@ fn apply_staged(app: &AppHandle, hub: &Arc<Hub>) {
     if staged.is_empty() {
         return;
     }
-    let game = game::status();
+    // One snapshot for the whole pass, and one that can see tools this hub did
+    // not start. This runs at startup, where `hub.running` is empty by
+    // definition -- so consulting only that meant a staged update was applied
+    // over whatever the reader had left open, which is the single case the
+    // interlock exists to prevent.
+    let snapshot = procs::Snapshot::take();
+    let game = game::status_from(&snapshot);
     for (id, entry) in staged {
         let Ok(tool) = hub.tool(&id) else { continue };
-        let tool_running = hub
-            .running
-            .lock()
-            .ok()
-            .and_then(|r| r.get(&id).copied())
-            .map(launch::is_alive)
-            .unwrap_or(false);
+        let tool_running = tool_is_running(hub, &id, &snapshot);
         if game::install_blocked_by(&tool.name, tool_running, &game).is_some() {
             continue;
         }
+        let Ok(_claim) = InstallClaim::take(hub, &id) else {
+            continue;
+        };
         let artifact = PathBuf::from(&entry.artifact_path);
         let emitter = {
             let app = app.clone();
@@ -878,6 +999,39 @@ fn refresh_hub_update(hub: &Hub, app: &AppHandle) -> Option<HubUpdate> {
     update
 }
 
+/// Download and install the hub's own update.
+///
+/// In Rust, and not in the frontend, because `work_offline` has to be enforced
+/// somewhere a stale frontend cannot get past -- the same reasoning that keeps
+/// the *check* here. The frontend used to call the updater plugin directly,
+/// which meant turning Work offline on left "Download and install" working: the
+/// switch covered every request the hub makes except the largest one it makes
+/// about itself. `updater:default` is no longer in the window's capability, so
+/// that route is closed rather than merely unused.
+///
+/// The handle stays on this side for its whole life, so nothing has to cross
+/// the boundary: `check()` returns it and `download_and_install` consumes it.
+#[tauri::command(async)]
+fn install_hub_update(app: AppHandle, hub: State<'_, Arc<Hub>>) -> Result<String, String> {
+    if !hub.settings().may_reach_network() {
+        return Err("Work offline is on. Turn it off to update the hub.".into());
+    }
+
+    let updater = app.updater().map_err(|error| error.to_string())?;
+    let found = tauri::async_runtime::block_on(updater.check()).map_err(|error| error.to_string())?;
+    let Some(update) = found else {
+        // The backend said there was one. Between then and now the release page
+        // stopped offering it -- a draft re-drafted, a release deleted.
+        return Err("The release is no longer being offered. Check again.".into());
+    };
+
+    let version = update.version.clone();
+    tauri::async_runtime::block_on(update.download_and_install(|_, _| {}, || {}))
+        .map_err(|error| error.to_string())?;
+    hub.log.info(format!("installed hub update {version}"));
+    Ok(version)
+}
+
 /// The launch check, plus whatever auto-download/auto-install allow.
 fn startup_check(app: AppHandle, hub: Arc<Hub>) {
     let settings = hub.settings();
@@ -937,7 +1091,6 @@ fn startup_check(app: AppHandle, hub: Arc<Hub>) {
         return;
     }
 
-    let game = game::status();
     for tool in updates {
         let emitter = {
             let app = app.clone();
@@ -953,34 +1106,24 @@ fn startup_check(app: AppHandle, hub: Arc<Hub>) {
             continue;
         }
 
-        let tool_running = hub
-            .running
-            .lock()
-            .ok()
-            .and_then(|r| r.get(&tool.id).copied())
-            .map(launch::is_alive)
-            .unwrap_or(false);
+        // Taken here rather than before the loop: the download above can run
+        // for minutes, and what was closed when the check started is often open
+        // by the time it finishes.
+        let snapshot = procs::Snapshot::take();
+        let game = game::status_from(&snapshot);
+        let tool_running = tool_is_running(&hub, &tool.id, &snapshot);
 
         // D5's interlocks. An update that cannot be applied safely waits and
         // says why, rather than being written over a running tool or over a
         // game whose PE ForgePact has patched.
         if let Some(reason) = game::install_blocked_by(&tool.name, tool_running, &game) {
-            hub.log.info(format!("staged {}: {reason}", tool.id));
-            if let Ok(mut guard) = hub.state.lock() {
-                guard.staged.insert(
-                    tool.id.clone(),
-                    state::Staged {
-                        version: tool.version.clone(),
-                        artifact_path: artifact.to_string_lossy().to_string(),
-                        sha256: tool.artifact.sha256.clone(),
-                        staged_at: state::now_iso(),
-                        blocked_by: reason,
-                    },
-                );
-            }
-            hub.persist();
+            stage(&hub, &tool, &artifact, reason);
             continue;
         }
+
+        let Ok(_claim) = InstallClaim::take(&hub, &tool.id) else {
+            continue;
+        };
 
         match install::install_artifact(&hub.layout, &tool, &artifact, &emitter) {
             Ok(installed) => {
@@ -1069,6 +1212,7 @@ pub fn run() {
         catalog: Mutex::new(loaded),
         running: Mutex::new(BTreeMap::new()),
         probes: Mutex::new(BTreeMap::new()),
+        installing: Mutex::new(BTreeSet::new()),
         hub_update: Mutex::new(None),
         repo_root,
         elevated,
@@ -1144,6 +1288,7 @@ pub fn run() {
             set_favorite,
             check_for_updates,
             check_hub_update,
+            install_hub_update,
             install_tool,
             uninstall_tool,
             rollback_tool,
@@ -1185,12 +1330,91 @@ mod tests {
             catalog: Mutex::new(catalog::embedded().expect("the embedded catalog must verify")),
             running: Mutex::new(BTreeMap::new()),
             probes: Mutex::new(BTreeMap::new()),
+            installing: Mutex::new(BTreeSet::new()),
             hub_update: Mutex::new(None),
             repo_root: None,
             elevated: false,
             log,
         };
         (hub, root)
+    }
+
+    fn installed_at(path: &str) -> state::Installed {
+        state::Installed {
+            version: "1.0.0".into(),
+            installed_at: state::now_iso(),
+            sha256: "0".repeat(64),
+            path: path.to_string(),
+            previous: None,
+        }
+    }
+
+    fn proc_at(pid: u32, exe: PathBuf) -> procs::Proc {
+        procs::Proc {
+            pid,
+            parent: None,
+            name: exe
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default(),
+            exe: Some(exe),
+        }
+    }
+
+    /// The case the interlock could not see, and the reason it now takes a
+    /// snapshot.
+    ///
+    /// `Hub.running` is in memory, so a restart empties it. `apply_staged` runs
+    /// at startup and asked only that map, which meant it applied a staged
+    /// update over a tool the reader had left open -- the one thing the
+    /// interlock exists to stop, at the one moment it was blindest.
+    #[test]
+    fn a_tool_left_open_across_a_restart_still_counts_as_running() {
+        let (hub, root) = scratch_hub("running-after-restart");
+        let dir = root.join("tools").join("forgepact").join("1.3.16");
+        let exe = dir.join("ForgePact.exe");
+        hub.state
+            .lock()
+            .unwrap()
+            .installed
+            .insert("forgepact".into(), installed_at(&dir.to_string_lossy()));
+
+        // Nothing tracked: exactly the state after a restart.
+        assert!(hub.running.lock().unwrap().is_empty());
+
+        let elsewhere = procs::Snapshot::of(vec![proc_at(4242, root.join("other").join("thing.exe"))]);
+        assert!(
+            !tool_is_running(&hub, "forgepact", &elsewhere),
+            "a process outside the install directory is not this tool"
+        );
+
+        let open = procs::Snapshot::of(vec![proc_at(4242, exe)]);
+        assert!(
+            tool_is_running(&hub, "forgepact", &open),
+            "a process running out of the install directory is this tool, tracked or not"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Two installs of one tool share a `.part` file and a staging directory.
+    #[test]
+    fn one_install_per_tool_and_the_claim_is_released() {
+        let (hub, root) = scratch_hub("install-claim");
+        let hub = Arc::new(hub);
+
+        let first = InstallClaim::take(&hub, "forgepact").expect("the first claim is free");
+        assert!(
+            InstallClaim::take(&hub, "forgepact").is_err(),
+            "a second install of the same tool must be refused"
+        );
+        InstallClaim::take(&hub, "hscraftsim").expect("a different tool is unaffected");
+
+        drop(first);
+        InstallClaim::take(&hub, "forgepact")
+            .expect("the claim must be released on drop, or the tool is stuck until restart");
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     /// The regression that prompted the threading work, pinned.

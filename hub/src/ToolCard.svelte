@@ -23,11 +23,11 @@
   /**
    * Is an install still running?
    *
-   * `install_tool` resolves as soon as the backend has spawned its worker
-   * thread, so the promise returning means the install *started*. What says it
-   * is still going is the progress stream -- and without this the Install
-   * button came back live two frames after being clicked, which let a second
-   * install be started over the first.
+   * `install_tool` now runs the install before it resolves, so this card's own
+   * click is covered by `working`. This is for the installs it did not start:
+   * Update all, and the auto-install that follows a launch check. Both drive
+   * this card's progress bar, and without this the button stayed live under a
+   * download already running against the same staging directory.
    */
   const inFlight = $derived(
     progress !== null && !['done', 'failed'].includes(progress.phase),

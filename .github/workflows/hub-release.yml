@@ -151,7 +151,29 @@ jobs:
             exit 1
           fi
 
+      # Build only, and deliberately with no release inputs at all.
+      #
+      # This used to be one step with `--no-bundle` appended for a dry run,
+      # which could not work: `tauri-action` fails with `No artifacts were
+      # found.` whenever a `tagName` is supplied and nothing was bundled, and
+      # `--no-bundle` guarantees nothing is. So the dry run -- the thing whose
+      # whole job is to prove a release will build -- was the one path that
+      # could never finish. Bundling stays on here so what is exercised is what
+      # a real release does; nothing is uploaded because nothing is configured
+      # to be.
+      - name: Build (dry run)
+        if: github.event.inputs.dry_run == 'true'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          # Signing still happens, so a key that cannot sign fails the dry run
+          # rather than the release.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: hub
+
       - name: Build, sign and publish
+        if: github.event.inputs.dry_run != 'true'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -180,7 +202,6 @@ jobs:
           # latest.json is what the updater endpoint in tauri.conf.json points
           # at. Without it the hub can be installed but never updates itself.
           includeUpdaterJson: true
-          args: ${{ github.event.inputs.dry_run == 'true' && '--no-bundle' || '' }}
 
       # `releaseDraft: true` is deliberate -- nothing ships without someone
       # looking at it first -- but it has a consequence that is easy to forget

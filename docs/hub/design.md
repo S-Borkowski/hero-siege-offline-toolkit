@@ -177,8 +177,8 @@ in Rust as well as in the UI, so a hand-edited `state.json` cannot get past it.
 
 ### The two interlocks
 
-Auto-install only. Both produce a *staged* install — downloaded, verified, and
-waiting — with the reason shown on the Updates screen.
+Both produce a *staged* install — downloaded, verified, and waiting — with the
+reason shown on the Updates screen.
 
 - **Never over a running tool.**
 - **Never while `Hero_Siege.exe` is running.** ForgePact patches the game's PE
@@ -190,6 +190,28 @@ Staged installs are applied when the blocking condition clears: on Stop, and at
 startup before the network is touched — a pending install the user already agreed
 to should not wait on a check succeeding.
 
+**Every path that writes over an installation checks them**, not only the
+automatic one. `install_tool` — the command behind a card's *Update* button and
+behind *Update all* — stages rather than refusing, because the reader has
+already asked for the update and the download is the slow part. The checks were
+once on the auto-install path alone, which left *Update all* free to write over
+a tool whose own card had just withheld its button for being open.
+
+**"Is this tool running" is answered from a process snapshot**, the way
+`build_view` answers it: a tracked PID still alive, *or* any process whose
+executable sits inside the tool's install directory. `Hub.running` alone is not
+enough — it lives in memory, so a restart empties it, and `apply_staged` runs at
+startup. The moment the interlock mattered most was the moment it could see
+nothing.
+
+**One install per tool at a time**, held in Rust for the whole command. Two
+installs of one tool share a `.part` download and a staging directory: the
+second writes over the first's download, then races it to the rename that
+commits the install. `install_tool` also runs the install *before* it resolves,
+so awaiting it means the install finished — it used to return as soon as a
+worker thread had been spawned, which is what let *Update all* clear its own
+button while ten downloads were still running.
+
 ### Work offline
 
 A master switch that disables every outbound request including the launch check.
@@ -200,14 +222,29 @@ keeps the part that matters — nothing is contacted before the first-run screen
 answered, and Work offline is one click away on that screen.
 
 `Settings::may_reach_network()` is `!work_offline && first_run_done`, and every
-command that would fetch checks it.
+command that would fetch checks it — **including the hub's own self-update**,
+which is the largest request it makes. That one used to escape: the install ran
+in the frontend, calling the updater plugin directly, so turning Work offline on
+with an update pending left *Download and install* downloading and installing.
+It now runs in Rust behind `install_hub_update`, and `updater:default` has been
+removed from the window's capability, so the frontend route is closed rather
+than merely unused.
 
 ### The hub itself
 
-Tauri's updater plugin, with `download()` and `install()` kept apart so the
-auto-download and auto-install settings map onto it directly. `latest.json` is
-published by `tauri-action` with `includeUpdaterJson: true` and signed with
-`TAURI_SIGNING_PRIVATE_KEY`; the matching public key is in `tauri.conf.json`.
+Tauri's updater plugin, driven entirely from Rust — `check_hub_update` asks,
+`install_hub_update` downloads and installs, and the handle the updater returns
+never has to cross the boundary because the side that obtains it is the side
+that uses it. `latest.json` is published by `tauri-action` with
+`includeUpdaterJson: true` and signed with `TAURI_SIGNING_PRIVATE_KEY`; the
+matching public key is in `tauri.conf.json`.
+
+A manual dry run of `hub-release.yml` builds the bundle and uploads it as a
+workflow artifact, with no release inputs at all. It once passed `--no-bundle`
+while still supplying `tagName`, which cannot work: `tauri-action` fails with
+`No artifacts were found.` when a tag is given and nothing was bundled. The step
+whose whole job is to prove a release will build was the one that could never
+finish.
 
 ---
 

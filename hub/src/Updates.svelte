@@ -18,10 +18,19 @@
   async function updateAll() {
     updatingAll = true;
     try {
-      // Sequentially: ten simultaneous downloads would saturate the link and
-      // make every progress bar useless.
+      // Sequentially, which this now actually is: `install_tool` used to
+      // resolve as soon as the backend had spawned a worker, so this loop fired
+      // all ten downloads at once and then cleared the button while every one
+      // of them was still running -- and a second click started a second
+      // install of each tool against the same .part file and staging directory.
       for (const tool of pending) {
-        await act('install_tool', { id: tool.id });
+        // One tool's failure is not the other nine's. `act` has already told
+        // the reader which one it was; carrying on is what "Update all" means.
+        try {
+          await act('install_tool', { id: tool.id });
+        } catch {
+          continue;
+        }
       }
     } finally {
       updatingAll = false;
