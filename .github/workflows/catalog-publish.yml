@@ -1,0 +1,77 @@
+# Publish the signed catalog to the release tag the hub fetches from.
+#
+# Separate from `catalog.yml` on purpose. That workflow *proposes* a catalog and
+# opens a pull request; this one publishes whatever is on `main`. Publishing
+# used to be a step inside the regenerate job, conditioned on the rebuild
+# finding nothing to change -- which made the release tag a side effect of a
+# no-op, and meant that merging a catalog change published nothing until a
+# later run happened to find no further change. Merging is the event that
+# should publish, so merging is what triggers this.
+name: Catalog publish
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'catalog/catalog.json'
+      - 'catalog/catalog.json.minisig'
+  # For re-uploading after the release tag is deleted, or to republish the
+  # catalog already on main without touching it.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: catalog-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # The hub refuses a catalog whose signature does not verify, so one that
+      # cannot be verified must never reach the tag the hub fetches from --
+      # publishing it would take the whole library offline for every install
+      # until the next good catalog landed. This also catches a catalog edited
+      # by hand after it was signed.
+      - name: The signature must check out before anything is published
+        run: |
+          python tools/minisign.py verify catalog/catalog.json \
+            --public-key catalog/catalog-signing.pub
+
+      - name: Refuse a catalog this repository's own tests reject
+        run: python -m unittest discover -s tests
+
+      - name: Publish to the catalog tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # `--latest=false` matters more than it looks. GitHub picks the latest
+          # release by date unless told otherwise, and `hub-release.yml` points
+          # the updater at `releases/latest/download/latest.json`. A catalog
+          # release allowed to become "latest" would therefore break the hub's
+          # ability to update itself, quietly, until the next hub release.
+          gh release view catalog >/dev/null 2>&1 || gh release create catalog \
+            --title 'Tool catalog' \
+            --latest=false \
+            --notes 'The signed catalog the Toolkit Hub reads, and its minisign signature.
+
+          Published by CI from `catalog/` on `main`. Do not edit these assets by
+          hand: the hub verifies the signature against a public key compiled into
+          it, so an edited catalog is one the hub refuses.'
+
+          gh release upload catalog \
+            catalog/catalog.json catalog/catalog.json.minisig --clobber
+
+          generated=$(python -c "import json; print(json.load(open('catalog/catalog.json'))['generated'])")
+          tools=$(python -c "import json; print(len(json.load(open('catalog/catalog.json'))['tools']))")
+          echo "published catalog generated $generated with $tools tools"

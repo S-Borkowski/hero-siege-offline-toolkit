@@ -77,3 +77,10 @@ Thumbs.db
 
 # Junie agent plans/session files (local planning aid, not project docs)
 .junie/
+
+# Planning documents, for the same reason. A plan says what someone intends to
+# build; it is out of date the moment the thing is built, and then the reader
+# has two documents and no way to tell which one describes the software they
+# are running. What was actually built is recorded in docs/hub/ and the
+# decisions in docs/adr/. Keep the plan on your own machine.
+*-plan.md

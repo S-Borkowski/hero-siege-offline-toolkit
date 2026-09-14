@@ -20,6 +20,7 @@ This directory serves as the centralized repository for development, architectur
 | **HS Offline Stat Forge** | `hs-stat-forge/` | [hs-stat-forge Instructions](hs-stat-forge/instructions.md) | Ready | Runtime character stat tuner and monster density modifier. |
 | **HS Game SDK** | `hs-game-sdk/` | [HS Game SDK Instructions](hs-game-sdk/instructions.md) | Ready | Centralized cross-language SDK and metadata library for GameMaker objects, scripts, assets, and runtime models. |
 | **Runtime Data Models** | `docs/` | [Runtime Data Models & Cheat-Sheet](../RUNTIME_DATA_MODELS.md) | Ready | Reverse-engineered Season 10 memory models, player instance structs, equipment slots, and drop tables. |
+| **Toolkit Hub** | `hub/` *(not a submodule)* | [Hub Instructions](../../hub/instructions.md) · [design](../hub/design.md) · [catalog schema](../hub/catalog-schema.md) | Ready | Tauri 2 + Svelte 5 desktop app that installs, launches and updates every tool above from a signed, hash-pinned catalog. |
 
 ---
 
