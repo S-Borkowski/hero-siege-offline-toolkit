@@ -80,6 +80,7 @@ project.
 
 ## Notes
 
+- [Automatic submodule pointer updates](docs/submodules/README.md#automated-submodule-pointer-updates): validated bot PRs merge automatically; feature PRs remain for manual review.
 - Offline / single-player use only
 - Back up your save files before editing
 - Use at your own risk
