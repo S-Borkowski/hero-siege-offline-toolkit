@@ -224,6 +224,10 @@ lives in one place (`TERMINAL_PHASES`) because it had three, and the two new
 phases would otherwise have been unknown to all of them.
 
 Guaranteeing it is structural rather than remembered: `ProgressStream` notices
+
+**A finished row leaves the drawer after a moment, and only its own timer may remove it.** Every progress event takes ownership of that tool's row, and a scheduled cleanup fires only if it still holds it. Removing by id alone meant a tool that finished one operation and began another inside that moment — auto-download completing, then *Update all* clicked — had the new operation's row deleted by the old one's timer, so the card stopped looking busy and offered its button back mid-install.
+
+That bookkeeping lives in `hub/src/progress-rows.js`, free of Svelte runes so `node --test` can execute it. Three frontend bugs in a row lived in logic nothing could run; `npm test` now runs those tests before the Rust ones.
 terminal events passing through and emits `Failed` if it is dropped without one.
 Four exits lost their terminal event simultaneously when orchestration moved out
 of `install::install`, which had been emitting it on the way out — which is the
@@ -510,28 +514,37 @@ a `catalog` release.
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | `hub-release.yml` | Only if the key has one. |
 | `HUB_DISPATCH_TOKEN` | each tool repository | The notification is skipped and the nightly schedule picks the release up instead. Latency, not correctness. |
 
-### Still to do, and why it is not done here
+### Still to do
 
-`.github/workflows/submodule-dispatch.yml` and
-`.github/workflow-templates/notify-hub.example.yml` exist on the unmerged branch
-`feature/hs-game-sdk-and-agent-guidelines`, not on `main`. The plan asks for two
-edits to them:
+Both notifier templates exist and neither is installed anywhere yet. All ten
+tool repositories carry `notify-hub.yml`, correctly keyed to each one's default
+branch — `hero-siege-item-editor` is `master`, not `main` — but none has a
+`HUB_DISPATCH_TOKEN`, so every one of them checks for the secret, logs that it
+is missing, and skips. They are installed and inert.
 
-1. Add `release-published` to `submodule-dispatch.yml`'s event-type allowlist.
-2. Add a second job to `notify-hub.example.yml` firing on `release: [published]`.
+`notify-hub-release.example.yml` is not installed at all, and it is the half
+that matters most: the catalog is built from each tool's latest *release*, and
+`notify-hub.yml` fires on a push. A release published by tagging an existing
+commit reaches this repository through nothing.
 
-Neither is made here, because creating those files on this branch would conflict
-with that one when it merges. `notify-hub-release.example.yml` is a standalone
-template instead, so a tool repository can install it today; when the other
-branch lands, fold its job into `notify-hub.yml` and delete the duplicate.
+The two stay separate files rather than one workflow with two jobs. They answer
+to different events, they can be adopted independently, and a repository that
+wants only the release half should not have to take the push half with it.
+
+`submodule-dispatch.yml` deliberately does **not** accept `release-published`:
+it bumps submodule pointers, which is a question about commits.
+[`catalog.yml`](../../.github/workflows/catalog.yml) takes that event directly,
+and takes `submodule-updated` as well, so one dispatch can have two
+consequences.
 
 ---
 
 ## Verification
 
+
 ```bash
 py -3 -m unittest discover -s tests   # catalog generation and signing
-cd hub && npm test                    # cargo test: install, rollback, interlocks
+cd hub && npm test                    # node --test, then cargo: rows, install, interlocks
 cd hub && npm run build               # the frontend
 cd hub && npm start                   # the app
 ```

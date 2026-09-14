@@ -514,12 +514,30 @@ mod tests {
 
         // No health endpoint, so the ports are all there is to go on.
         tool.launch.health = None;
-        let fallback = *tool.launch.ports.last().unwrap();
-        let listener = std::net::TcpListener::bind(("127.0.0.1", fallback));
-        if listener.is_ok() {
-            // Something on the last fallback port is not the tool.
-            assert!(!already_running(&tool));
+
+        // Ports this machine is demonstrably not using, rather than the
+        // catalog's. ForgePact's list is ordinary numbers like 8766, and
+        // `already_running` reads the *first* of them -- so anything unrelated
+        // holding that one failed this test, which then reported the machine it
+        // ran on rather than the code. It was reported from a checkout where a
+        // local Python process happened to hold 8766.
+        fn free_port() -> u16 {
+            std::net::TcpListener::bind(("127.0.0.1", 0))
+                .expect("the loopback interface must accept an ephemeral bind")
+                .local_addr()
+                .expect("a bound listener has a local address")
+                .port()
         }
+        let preferred = free_port();
+        let fallback = free_port();
+        assert_ne!(preferred, fallback);
+        tool.launch.ports = vec![preferred, fallback];
+
+        let listener = std::net::TcpListener::bind(("127.0.0.1", fallback))
+            .expect("the fallback port was free a moment ago");
+        // Something on the last fallback port is not the tool: only the first
+        // port is evidence, so this must still read as not running.
+        assert!(!already_running(&tool));
         drop(listener);
     }
 

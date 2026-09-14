@@ -5,6 +5,7 @@
 // `0.9.8` comparison has exactly one implementation rather than one per screen.
 
 import { invoke, listen, native } from './bridge.js';
+import { createProgressRows } from './progress-rows.js';
 
 let view = $state(null);
 let loading = $state(true);
@@ -27,6 +28,14 @@ let notices = $state([]);
 let nextNoticeId = 1;
 /** Tool id -> the most recent install-progress event for it. */
 let progress = $state({});
+
+// The rows, and the single rule about when a finished one disappears, live
+// in a runes-free module so `node --test` can execute them. This mirrors what
+// that module decides into reactive state and does not decide anything itself.
+const rows = createProgressRows();
+rows.watch((next) => {
+  progress = next;
+});
 let health = $state({});
 
 export function library() {
@@ -270,7 +279,8 @@ export function connect() {
   listen('install-progress', (e) => {
     const payload = e.payload;
     if (!payload?.id) return;
-    progress = { ...progress, [payload.id]: payload };
+    // The row itself, and when it goes, are `progress-rows.js`.
+    rows.receive(payload);
     if (payload.phase === 'failed' && !awaitingInstall.has(payload.id)) {
       // An install nobody clicked -- auto-install, or one staged earlier going
       // in at startup -- has no rejected promise anywhere for its failure to
@@ -284,16 +294,6 @@ export function connect() {
       // Library screen the click came from. Saying so beats a card that simply
       // goes quiet.
       notify('info', `${payload.id}: ${payload.reason}`);
-    }
-    if (['done', 'staged', 'downloaded'].includes(payload.phase)) {
-      // Leave the finished row up briefly so the drawer does not blink an
-      // install out of existence the instant it lands. `failed` stays until the
-      // reader does something about it.
-      const id = payload.id;
-      setTimeout(() => {
-        const { [id]: _gone, ...rest } = progress;
-        progress = rest;
-      }, 2500);
     }
   }).then((off) => unsubscribes.push(off));
 
