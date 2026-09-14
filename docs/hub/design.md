@@ -204,10 +204,20 @@ enough — it lives in memory, so a restart empties it, and `apply_staged` runs 
 startup. The moment the interlock mattered most was the moment it could see
 nothing.
 
-**One install per tool at a time**, held in Rust for the whole command. Two
-installs of one tool share a `.part` download and a staging directory: the
-second writes over the first's download, then races it to the rename that
-commits the install. `install_tool` also runs the install *before* it resolves,
+**The interlock is read after the download, never only before it.** Every path
+is download → ask → activate or stage, and `activate_or_stage` takes the answer
+as an argument so its caller has to say *when* it asked. Asking only beforehand
+is worthless here: the download runs for minutes, so an install begun against a
+closed game went on to overwrite a running one, with a check that had been true
+when it was made and meaningless by the time it was used.
+
+**One install per tool at a time**, held in Rust from before the download until
+after the activation. Two installs of one tool share a `.part` download and a
+staging directory: the second writes over the first's download, then races it to
+the rename that commits the install. The claim covers the download because the
+download is the part that collides — taking it only around the activation left
+*Update all* free to start a second download into the same file while the launch
+check's was still running. `install_tool` also runs the install *before* it resolves,
 so awaiting it means the install finished — it used to return as soon as a
 worker thread had been spawned, which is what let *Update all* clear its own
 button while ten downloads were still running.

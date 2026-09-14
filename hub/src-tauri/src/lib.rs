@@ -621,6 +621,59 @@ impl Drop for InstallClaim {
     }
 }
 
+/// The interlock, read now.
+///
+/// Deliberately a function rather than a value computed once and carried: the
+/// answer goes stale in seconds, and the gap that matters is the download,
+/// which runs for minutes. Whoever is about to write over an installation must
+/// ask again immediately before doing it.
+fn blocked_now(hub: &Hub, tool: &catalog::Tool) -> Option<String> {
+    let snapshot = procs::Snapshot::take();
+    let game = game::status_from(&snapshot);
+    let running = tool_is_running(hub, &tool.id, &snapshot);
+    game::install_blocked_by(&tool.name, running, &game)
+}
+
+/// Write a downloaded artifact into place, or stage it if the interlock has
+/// closed since the download began.
+///
+/// `blocked` is passed in rather than read here so that the caller has to state
+/// *when* it asked -- and every caller asks after its download, never before.
+/// Checking only before is how an install that started against a closed game
+/// went on to overwrite a running one: the check was true when it was made and
+/// meaningless by the time it was used.
+fn activate_or_stage(
+    hub: &Arc<Hub>,
+    tool: &catalog::Tool,
+    artifact: &std::path::Path,
+    emitter: &dyn Fn(install::Progress),
+    blocked: Option<String>,
+) -> Result<(), String> {
+    if let Some(reason) = blocked {
+        stage(hub, tool, artifact, reason);
+        return Ok(());
+    }
+    match install::install_artifact(&hub.layout, tool, artifact, emitter) {
+        Ok(installed) => {
+            hub.log.info(format!(
+                "installed {} {} ({})",
+                tool.id, installed.version, installed.sha256
+            ));
+            if let Ok(mut guard) = hub.state.lock() {
+                guard.installed.insert(tool.id.clone(), installed);
+                guard.staged.remove(&tool.id);
+            }
+            hub.persist();
+            Ok(())
+        }
+        Err(error) => {
+            hub.log
+                .error(format!("installing {} failed: {error}", tool.id));
+            Err(error.to_string())
+        }
+    }
+}
+
 /// Record an install that cannot be applied yet, with the reason on it.
 fn stage(hub: &Hub, tool: &catalog::Tool, artifact: &std::path::Path, reason: String) {
     hub.log.info(format!("staged {}: {reason}", tool.id));
@@ -660,57 +713,28 @@ fn install_tool(app: AppHandle, hub: State<'_, Arc<Hub>>, id: String) -> Result<
         }
     };
 
-    // The interlock, on the path a person reaches by clicking. It lived only on
-    // the auto-install path, so Update all -- which submits every tool with a
-    // newer release, including ones whose own card withholds Update because
-    // they are open -- wrote over running tools, and over a game whose PE
-    // ForgePact has patched.
-    let snapshot = procs::Snapshot::take();
-    let game = game::status_from(&snapshot);
-    let running = tool_is_running(&hub, &tool.id, &snapshot);
-    if let Some(reason) = game::install_blocked_by(&tool.name, running, &game) {
-        // Staged, not refused. The reader asked for this update and the
-        // download is the slow part; making them ask again once the tool is
-        // closed would throw that away for nothing.
-        let artifact = match bundled_artifact(&hub, &tool) {
-            Some(path) => path,
-            None => install::download(&tool, &hub.layout, &emitter).map_err(|e| e.to_string())?,
-        };
-        stage(&hub, &tool, &artifact, reason);
-        announce(&app, &hub);
-        return Ok(());
-    }
-
+    // Download first, then read the interlock, then activate -- the same order
+    // the launch check uses, and now the same code. Staging a blocked update
+    // needs the artifact in hand anyway, so there is nothing to save by
+    // checking first, and checking *only* first is what let an install started
+    // against a closed game overwrite a running one several minutes later.
+    //
     // Inline rather than on a spawned thread. `#[tauri::command(async)]`
     // already runs this off the thread pumping the window's messages, and
     // spawning again meant the command returned as soon as the worker started
     // -- so `await install_tool(...)` resolved before anything had been
     // downloaded, and Update all cleared its own button while ten installs were
     // still running.
-    let outcome = match bundled_artifact(&hub, &tool) {
-        Some(path) => install::install_artifact(&hub.layout, &tool, &path, &emitter),
-        None => install::install(&hub.layout, &tool, &emitter),
+    let artifact = match bundled_artifact(&hub, &tool) {
+        Some(path) => path,
+        None => install::download(&tool, &hub.layout, &emitter).map_err(|error| {
+            hub.log
+                .error(format!("downloading {} failed: {error}", tool.id));
+            error.to_string()
+        })?,
     };
 
-    let result = match outcome {
-        Ok(installed) => {
-            hub.log.info(format!(
-                "installed {} {} ({})",
-                tool.id, installed.version, installed.sha256
-            ));
-            if let Ok(mut guard) = hub.state.lock() {
-                guard.installed.insert(tool.id.clone(), installed);
-                guard.staged.remove(&tool.id);
-            }
-            hub.persist();
-            Ok(())
-        }
-        Err(error) => {
-            hub.log
-                .error(format!("installing {} failed: {error}", tool.id));
-            Err(error.to_string())
-        }
-    };
+    let result = activate_or_stage(&hub, &tool, &artifact, &emitter, blocked_now(&hub, &tool));
     announce(&app, &hub);
     result
 }
@@ -912,19 +936,8 @@ fn apply_staged(app: &AppHandle, hub: &Arc<Hub>) {
     if staged.is_empty() {
         return;
     }
-    // One snapshot for the whole pass, and one that can see tools this hub did
-    // not start. This runs at startup, where `hub.running` is empty by
-    // definition -- so consulting only that meant a staged update was applied
-    // over whatever the reader had left open, which is the single case the
-    // interlock exists to prevent.
-    let snapshot = procs::Snapshot::take();
-    let game = game::status_from(&snapshot);
     for (id, entry) in staged {
         let Ok(tool) = hub.tool(&id) else { continue };
-        let tool_running = tool_is_running(hub, &id, &snapshot);
-        if game::install_blocked_by(&tool.name, tool_running, &game).is_some() {
-            continue;
-        }
         let Ok(_claim) = InstallClaim::take(hub, &id) else {
             continue;
         };
@@ -935,19 +948,17 @@ fn apply_staged(app: &AppHandle, hub: &Arc<Hub>) {
                 let _ = app.emit("install-progress", progress);
             }
         };
-        match install::install_artifact(&hub.layout, &tool, &artifact, &emitter) {
-            Ok(installed) => {
-                hub.log
-                    .info(format!("applied staged update {} {}", id, installed.version));
-                if let Ok(mut guard) = hub.state.lock() {
-                    guard.installed.insert(id.clone(), installed);
-                    guard.staged.remove(&id);
-                }
-                hub.persist();
-            }
-            Err(error) => hub
-                .log
-                .error(format!("staged update for {id} failed: {error}")),
+        // Read per tool rather than once for the pass: applying one staged
+        // update takes time, and the tool after it may have been opened while
+        // that ran. `blocked_now` also sees tools this hub did not start, which
+        // is what this pass needs -- it runs at startup, where `hub.running` is
+        // empty by definition, so consulting only that map meant a staged
+        // update was applied over whatever the reader had left open.
+        if let Err(error) =
+            activate_or_stage(hub, &tool, &artifact, &emitter, blocked_now(hub, &tool))
+        {
+            hub.log
+                .error(format!("staged update for {id} failed: {error}"));
         }
     }
 }
@@ -1098,6 +1109,17 @@ fn startup_check(app: AppHandle, hub: Arc<Hub>) {
                 let _ = app.emit("install-progress", progress);
             }
         };
+        // Claimed before the download, not after it. The download is the part
+        // that collides: every download of one tool writes the same `.part`
+        // file, so a click on Update all during this one used to start a second
+        // download into it. Held for the rest of the iteration, which covers
+        // the download, the staging and the activation alike -- including the
+        // download-only case below, which returns while the bytes are on disk
+        // and the claim still matters.
+        let Ok(_claim) = InstallClaim::take(&hub, &tool.id) else {
+            continue;
+        };
+
         let Ok(artifact) = install::download(&tool, &hub.layout, &emitter) else {
             continue;
         };
@@ -1106,35 +1128,20 @@ fn startup_check(app: AppHandle, hub: Arc<Hub>) {
             continue;
         }
 
-        // Taken here rather than before the loop: the download above can run
-        // for minutes, and what was closed when the check started is often open
-        // by the time it finishes.
-        let snapshot = procs::Snapshot::take();
-        let game = game::status_from(&snapshot);
-        let tool_running = tool_is_running(&hub, &tool.id, &snapshot);
-
-        // D5's interlocks. An update that cannot be applied safely waits and
-        // says why, rather than being written over a running tool or over a
-        // game whose PE ForgePact has patched.
-        if let Some(reason) = game::install_blocked_by(&tool.name, tool_running, &game) {
-            stage(&hub, &tool, &artifact, reason);
-            continue;
-        }
-
-        let Ok(_claim) = InstallClaim::take(&hub, &tool.id) else {
-            continue;
-        };
-
-        match install::install_artifact(&hub.layout, &tool, &artifact, &emitter) {
-            Ok(installed) => {
-                if let Ok(mut guard) = hub.state.lock() {
-                    guard.installed.insert(tool.id.clone(), installed);
-                }
-                hub.persist();
-            }
-            Err(error) => hub
-                .log
-                .error(format!("auto-install of {} failed: {error}", tool.id)),
+        // D5's interlocks, read after the download rather than before it: it
+        // can run for minutes, and what was closed when it started is often
+        // open by the time it finishes. An update that cannot be applied safely
+        // waits and says why, rather than being written over a running tool or
+        // over a game whose PE ForgePact has patched.
+        if let Err(error) = activate_or_stage(
+            &hub,
+            &tool,
+            &artifact,
+            &emitter,
+            blocked_now(&hub, &tool),
+        ) {
+            hub.log
+                .error(format!("auto-install of {} failed: {error}", tool.id));
         }
     }
     announce(&app, &hub);
@@ -1413,6 +1420,86 @@ mod tests {
         drop(first);
         InstallClaim::take(&hub, "forgepact")
             .expect("the claim must be released on drop, or the tool is stuck until restart");
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The gap between deciding and acting.
+    ///
+    /// The interlock was read once, before a download that runs for minutes,
+    /// and then not again -- so an install begun while the game was closed went
+    /// on to overwrite it once the player had started it. `activate_or_stage`
+    /// takes the answer as an argument precisely so the caller has to say when
+    /// it asked, and every caller asks after its download.
+    ///
+    /// Being handed a blocked verdict *with the artifact already downloaded* is
+    /// exactly the post-download moment, so this covers it: nothing is
+    /// activated, the update waits, and the reason is on it.
+    #[test]
+    fn an_interlock_that_closes_during_the_download_stages_instead_of_activating() {
+        let (hub, root) = scratch_hub("blocked-after-download");
+        let hub = Arc::new(hub);
+        let tool = hub
+            .catalog
+            .lock()
+            .unwrap()
+            .catalog
+            .tools
+            .first()
+            .cloned()
+            .expect("the embedded catalog has tools");
+
+        // A path that could not possibly be installed from. Reaching
+        // `install_artifact` at all would fail the test by failing on this.
+        let artifact = root.join("downloaded.zip");
+
+        let outcome = activate_or_stage(
+            &hub,
+            &tool,
+            &artifact,
+            &|_| {},
+            Some("Hero Siege is running.".to_string()),
+        );
+        assert!(outcome.is_ok(), "a blocked update is not an error");
+
+        let state = hub.state.lock().unwrap();
+        assert!(
+            !state.installed.contains_key(&tool.id),
+            "nothing may be activated while the interlock is closed"
+        );
+        let waiting = state
+            .staged
+            .get(&tool.id)
+            .expect("the downloaded artifact must be kept, not thrown away");
+        assert_eq!(waiting.blocked_by, "Hero Siege is running.");
+        assert_eq!(waiting.artifact_path, artifact.to_string_lossy());
+        drop(state);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The claim has to be held across the download, not just the activation.
+    ///
+    /// Every download of one tool writes the same `.part` file, so the download
+    /// is the part that collides. The launch check took its claim after
+    /// downloading, which left Update all free to start a second download into
+    /// that same file.
+    #[test]
+    fn a_claim_held_across_a_download_blocks_a_second_one() {
+        let (hub, root) = scratch_hub("claim-covers-download");
+        let hub = Arc::new(hub);
+
+        // What the launch check holds while its download runs.
+        let downloading = InstallClaim::take(&hub, "forgepact").expect("the first claim is free");
+
+        // What Update all does in the middle of it.
+        assert!(
+            InstallClaim::take(&hub, "forgepact").is_err(),
+            "a second download of the same tool writes the same .part file"
+        );
+
+        drop(downloading);
+        InstallClaim::take(&hub, "forgepact").expect("released once the first is done");
 
         let _ = std::fs::remove_dir_all(root);
     }
