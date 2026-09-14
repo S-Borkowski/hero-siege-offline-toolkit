@@ -233,12 +233,27 @@ export async function saveSettings(next) {
  * should call `refresh()` at its own call site rather than putting the cost
  * back on all of them.
  */
+/**
+ * Installs this window is awaiting, by tool id.
+ *
+ * A failed install is now reported twice: the command rejects, and a terminal
+ * `failed` event arrives on the progress stream. Both are wanted, but not for
+ * the same install -- the stream's toast exists for the installs nobody
+ * clicked, which have no promise to reject. So the stream stays quiet about one
+ * a caller here is already awaiting and will report itself.
+ */
+const awaitingInstall = new Set();
+
 export async function act(command, args) {
+  const tracked = command === 'install_tool' && args?.id ? args.id : null;
+  if (tracked) awaitingInstall.add(tracked);
   try {
     return await invoke(command, args);
   } catch (e) {
     notify('error', e?.message ?? e);
     throw e;
+  } finally {
+    if (tracked) awaitingInstall.delete(tracked);
   }
 }
 
@@ -256,9 +271,12 @@ export function connect() {
     const payload = e.payload;
     if (!payload?.id) return;
     progress = { ...progress, [payload.id]: payload };
-    if (payload.phase === 'failed') {
-      // This happened on a worker thread, long after the click returned, so
-      // there is no rejected promise anywhere for it to surface through.
+    if (payload.phase === 'failed' && !awaitingInstall.has(payload.id)) {
+      // An install nobody clicked -- auto-install, or one staged earlier going
+      // in at startup -- has no rejected promise anywhere for its failure to
+      // surface through. One that *was* clicked does, and is reported there
+      // instead; raising both put two differently worded toasts on screen for
+      // a single failure.
       notify('error', `${payload.id}: ${payload.error}`);
     }
     if (payload.phase === 'staged') {

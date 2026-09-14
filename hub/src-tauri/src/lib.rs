@@ -604,7 +604,10 @@ impl InstallClaim {
             .lock()
             .map_err(|_| "the install set is busy".to_string())?;
         if !claimed.insert(id.to_string()) {
-            return Err(format!("{id} is already being installed."));
+            // Worded for every holder, not just `install_tool`: uninstall and
+            // rollback take this too, and "already being installed" is the
+            // reason those were refused as much as it is for a second install.
+            return Err(format!("An install of {id} is already running."));
         }
         Ok(Self {
             hub: Arc::clone(hub),
@@ -834,10 +837,18 @@ fn bundled_artifact(hub: &Hub, tool: &catalog::Tool) -> Option<PathBuf> {
 
 #[tauri::command(async)]
 fn uninstall_tool(app: AppHandle, hub: State<'_, Arc<Hub>>, id: String) -> Result<(), String> {
-    if let Some(pid) = hub.running.lock().ok().and_then(|r| r.get(&id).copied()) {
-        if launch::is_alive(pid) {
-            return Err("Stop the tool before uninstalling it.".into());
-        }
+    let hub = Arc::clone(&hub);
+    // Uninstalling deletes the directory an install writes into, so it takes
+    // the same claim: an auto-install from the launch check can be part way
+    // through its rename when this arrives.
+    let _claim = InstallClaim::take(&hub, &id)?;
+
+    // The same restart-blindness the interlock had. `hub.running` is in memory,
+    // so after a restart this saw nothing and cheerfully deleted the directory
+    // a running tool was executing from. A process running out of the install
+    // directory is that tool, tracked or not.
+    if tool_is_running(&hub, &id, &procs::Snapshot::take()) {
+        return Err("Stop the tool before uninstalling it.".into());
     }
     install::uninstall(&hub.layout, &id).map_err(|e| e.to_string())?;
     {
@@ -853,6 +864,12 @@ fn uninstall_tool(app: AppHandle, hub: State<'_, Arc<Hub>>, id: String) -> Resul
 
 #[tauri::command(async)]
 fn rollback_tool(app: AppHandle, hub: State<'_, Arc<Hub>>, id: String) -> Result<(), String> {
+    let hub = Arc::clone(&hub);
+    // Rollback rewrites `current.json`, which is the same file an install
+    // rewrites when it activates. Whichever wrote last would win, and the
+    // pointer would name a version the other one had just moved.
+    let _claim = InstallClaim::take(&hub, &id)?;
+
     let installed = install::rollback(&hub.layout, &id).map_err(|e| e.to_string())?;
     hub.log
         .info(format!("rolled {id} back to {}", installed.version));
@@ -1004,6 +1021,30 @@ fn report(hub: State<'_, Arc<Hub>>, level: String, message: String) {
     hub.log.write(&level, &message);
 }
 
+/// Why a staged update can never be applied, if it cannot.
+///
+/// `install_artifact` verifies the artifact against the hash the catalog
+/// carries *now*. So a tool that releases again while its update waits behind a
+/// running game leaves bytes that can no longer pass: the check fails on every
+/// startup, forever, with an error toast each time and nothing in the interface
+/// able to clear it. An entry whose download has been cleared out of the cache
+/// is the same story with a different first failure.
+///
+/// Dropping the entry leaves the tool showing "an update is available", which
+/// is true, actionable, and downloads the right bytes next time.
+fn unapplicable(tool: &catalog::Tool, entry: &state::Staged) -> Option<String> {
+    if entry.version != tool.version {
+        return Some(format!(
+            "the catalog has moved on to {} since {} was staged",
+            tool.version, entry.version
+        ));
+    }
+    if !std::path::Path::new(&entry.artifact_path).is_file() {
+        return Some("its download is no longer in the cache".to_string());
+    }
+    None
+}
+
 /// Apply anything that was staged, now that whatever blocked it may be gone.
 fn apply_staged(app: &AppHandle, hub: &Arc<Hub>) {
     let staged: Vec<(String, state::Staged)> = match hub.state.lock() {
@@ -1023,6 +1064,16 @@ fn apply_staged(app: &AppHandle, hub: &Arc<Hub>) {
             continue;
         };
         let artifact = PathBuf::from(&entry.artifact_path);
+
+        if let Some(why) = unapplicable(&tool, &entry) {
+            hub.log
+                .info(format!("dropped the staged update for {id}: {why}"));
+            if let Ok(mut guard) = hub.state.lock() {
+                guard.staged.remove(&id);
+            }
+            hub.persist();
+            continue;
+        }
         let emitter = {
             let app = app.clone();
             move |progress: install::Progress| {
@@ -1731,6 +1782,54 @@ mod tests {
             });
         }
         assert_eq!(seen.lock().unwrap().clone(), vec!["downloaded"]);
+    }
+
+    /// A staged update that can never be applied has to be dropped, not
+    /// retried.
+    ///
+    /// `install_artifact` verifies the artifact against the hash the catalog
+    /// carries *now*. So if a tool releases again while its update sits behind
+    /// a running game, the staged bytes are the old version's and the hash
+    /// check fails -- on every startup, forever, with an error toast each time
+    /// and nothing in the interface able to clear it. The same is true of an
+    /// entry whose download has been cleared out of the cache.
+    ///
+    /// Dropping it leaves the tool showing "an update is available", which is
+    /// both true and actionable.
+    #[test]
+    fn a_staged_update_that_can_never_apply_is_dropped_rather_than_retried() {
+        let (hub, root) = scratch_hub("stale-staged");
+        let tool = installable_tool(&hub);
+
+        let entry = |version: &str, path: &std::path::Path| state::Staged {
+            version: version.to_string(),
+            artifact_path: path.to_string_lossy().to_string(),
+            sha256: "0".repeat(64),
+            staged_at: state::now_iso(),
+            blocked_by: "Hero Siege is running.".into(),
+        };
+
+        let present = root.join("staged.zip");
+        std::fs::write(&present, b"bytes").unwrap();
+
+        // Applicable: the version still matches and the download is there.
+        assert_eq!(
+            unapplicable(&tool, &entry(&tool.version, &present)),
+            None,
+            "a staged update that can still be applied must be kept"
+        );
+
+        // The tool released again while this waited behind a running game.
+        let stale = unapplicable(&tool, &entry("0.0.1-old", &present))
+            .expect("a version the catalog has moved past can never pass its hash check");
+        assert!(stale.contains(&tool.version) && stale.contains("0.0.1-old"), "{stale}");
+
+        // The download was cleared out of the cache.
+        let gone = unapplicable(&tool, &entry(&tool.version, &root.join("not-here.zip")))
+            .expect("an entry whose artifact is gone can never be applied");
+        assert!(gone.contains("cache"), "{gone}");
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     /// The regression that prompted the threading work, pinned.

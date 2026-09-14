@@ -229,13 +229,29 @@ Four exits lost their terminal event simultaneously when orchestration moved out
 of `install::install`, which had been emitting it on the way out — which is the
 argument against relying on remembering at each `return`.
 
+**A staged update that can never be applied is dropped, not retried.**
+`install_artifact` verifies against the hash the catalog carries *now*, so a
+tool that releases again while its update waits behind a running game leaves
+bytes that can no longer pass — and the check would fail on every startup,
+forever, with an error toast each time and nothing in the interface able to
+clear it. Same for an entry whose download has been cleared out of the cache.
+Dropping it leaves the tool showing "an update is available", which is true and
+which the reader can act on.
+
 **One install per tool at a time**, held in Rust from before the download until
 after the activation. Two installs of one tool share a `.part` download and a
 staging directory: the second writes over the first's download, then races it to
 the rename that commits the install. The claim covers the download because the
 download is the part that collides — taking it only around the activation left
 *Update all* free to start a second download into the same file while the launch
-check's was still running. `install_tool` also runs the install *before* it resolves,
+check's was still running. Uninstall and rollback take the same claim: the first
+deletes the directory an install is writing into, and the second rewrites the
+`current.json` an install rewrites when it activates.
+
+Uninstall also asks whether the tool is running the same way everything else
+does, from a process snapshot. It used to consult only the in-memory PID map,
+so after a restart it saw nothing and deleted the directory a running tool was
+executing from. `install_tool` also runs the install *before* it resolves,
 so awaiting it means the install finished — it used to return as soon as a
 worker thread had been spawned, which is what let *Update all* clear its own
 button while ten downloads were still running.
